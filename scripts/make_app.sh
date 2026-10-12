@@ -1,22 +1,31 @@
 #!/usr/bin/env bash
 # SwiftPM 빌드 결과물로 ShrimpBreak.app 을 조립한다.
 # Usage: scripts/make_app.sh [debug|release]   (default: release)
+#   release: Apple Silicon + Intel 유니버설 바이너리 (다른 사람에게 공유 가능)
+#   debug:   이 Mac 아키텍처만 (빠른 빌드)
 set -euo pipefail
 
 CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/ShrimpBreak.app"
-BIN="$ROOT/.build/$CONFIG/ShrimpBreak"
 
-echo "▶ swift build -c $CONFIG"
-swift build -c "$CONFIG" --package-path "$ROOT"
+if [ "$CONFIG" = "release" ]; then
+  echo "▶ swift build -c release (arm64 + x86_64)"
+  swift build -c release --arch arm64 --arch x86_64 --package-path "$ROOT"
+  BIN="$ROOT/.build/apple/Products/Release/ShrimpBreak"
+else
+  echo "▶ swift build -c $CONFIG"
+  swift build -c "$CONFIG" --package-path "$ROOT"
+  BIN="$ROOT/.build/$CONFIG/ShrimpBreak"
+fi
 
 echo "▶ assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/ShrimpBreak"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
-cp "$ROOT/Resources/shrimp.png" "$ROOT/Resources/tempura.png" "$APP/Contents/Resources/"
+cp "$ROOT/Resources/shrimp.png" "$ROOT/Resources/tempura.png" \
+   "$ROOT/Resources/MenuBarIcon.png" "$ROOT/Resources/MenuBarIcon@2x.png" "$APP/Contents/Resources/"
 
 echo "▶ app icon"
 ICONSET="$(mktemp -d)/AppIcon.iconset"

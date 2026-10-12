@@ -17,6 +17,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.overlay = overlay
         super.init()
 
+        if let button = statusItem.button {
+            // 템플릿 이미지라 라이트/다크 메뉴바에 맞춰 색이 자동으로 바뀐다.
+            let icon = Bundle.main.image(forResource: "MenuBarIcon")
+            icon?.isTemplate = true
+            icon?.size = NSSize(width: 18, height: 18)
+            button.image = icon
+            button.imagePosition = .imageLeading
+        }
+
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -172,10 +181,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func title() -> String {
         switch scheduler.phase {
-        case .counting(let deadline): return "🦐 \(Self.minutesLeft(until: deadline))"
-        case .alerting: return "🦐❗"
-        case .paused: return "🦐⏸"
-        case .away: return "🦐💤"
+        case .counting(let deadline): return " \(Self.minutesLeft(until: deadline))"
+        case .alerting: return " ❗"
+        case .paused: return " ⏸"
+        case .away: return " 💤"
         }
     }
 
