@@ -30,7 +30,7 @@ final class ShrimpOverlay: NSObject {
     /// 새우가 떠 있는 동안에만 켜는 전역 클릭 감지 (아래 updateMousePassThrough 주석 참고).
     private var globalClickMonitor: Any?
 
-    private static let shrimpSizeMillimeters: CGFloat = 30
+    private static let shrimpSizeMillimeters: CGFloat = 50
     private static let maxShrimps = 40
     private static let gravity: CGFloat = 2600 // pt/s²
     /// 더 높은 이웃 모니터로 올라탈 때, 그 바닥보다 이만큼 더 높이 뛴다 (새우 크기 대비).
