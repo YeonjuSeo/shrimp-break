@@ -33,7 +33,7 @@ final class ShrimpOverlay: NSObject {
     private static let shrimpSizeMillimeters: CGFloat = 50
     private static let maxShrimps = 40
     /// 낮을수록 같은 높이를 더 천천히 오르내린다 (통통 튀는 리듬).
-    private static let gravity: CGFloat = 1500 // pt/s²
+    private static let gravity: CGFloat = 1664 // pt/s² — 처음 값(2600)의 0.8² → 같은 높이를 0.8배 속도로
     /// 더 높은 이웃 모니터로 올라탈 때, 그 바닥보다 이만큼 더 높이 뛴다 (새우 크기 대비).
     private static let climbMarginRatio: CGFloat = 0.8
     /// 이보다 더 높이 올라가야 하는 경계는 벽으로 취급한다.
@@ -67,7 +67,7 @@ final class ShrimpOverlay: NSObject {
             home: home,
             x: CGFloat.random(in: home.frame.minX...max(home.frame.minX + 1, home.frame.maxX - size)),
             y: home.frame.minY - size,
-            vx: CGFloat.random(in: 110...220) * (Bool.random() ? 1 : -1),
+            vx: CGFloat.random(in: 128...256) * (Bool.random() ? 1 : -1),
             vy: sqrt(2 * Self.gravity * (peak + size)),
             bounceVelocity: sqrt(2 * Self.gravity * peak)
         )
