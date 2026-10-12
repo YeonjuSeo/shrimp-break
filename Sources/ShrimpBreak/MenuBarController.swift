@@ -10,6 +10,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     /// 메뉴바의 "남은 분" 표시용. 카운트다운 중에만 1분에 한 번 깨어난다.
     private var titleTimer: Timer?
+    private let sittingIcon = MenuBarController.loadIcon("MenuBarSitting")
+    private let standingIcon = MenuBarController.loadIcon("MenuBarStanding")
 
     init(scheduler: BreakScheduler, presence: PresenceMonitor, overlay: ShrimpOverlay) {
         self.scheduler = scheduler
@@ -17,14 +19,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.overlay = overlay
         super.init()
 
-        if let button = statusItem.button {
-            // 템플릿 이미지라 라이트/다크 메뉴바에 맞춰 색이 자동으로 바뀐다.
-            let icon = Bundle.main.image(forResource: "MenuBarIcon")
-            icon?.isTemplate = true
-            icon?.size = NSSize(width: 18, height: 18)
-            button.image = icon
-            button.imagePosition = .imageLeading
-        }
+        statusItem.button?.imagePosition = .imageLeading
 
         let menu = NSMenu()
         menu.delegate = self
@@ -33,6 +28,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func refresh() {
+        statusItem.button?.image = scheduler.posture == .sitting ? sittingIcon : standingIcon
         statusItem.button?.title = title()
         updateTitleTimer()
     }
@@ -177,6 +173,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         NSApp.terminate(nil)
     }
 
+    /// 템플릿 이미지라 라이트/다크 메뉴바에 맞춰 색이 자동으로 바뀐다.
+    private static func loadIcon(_ name: String) -> NSImage? {
+        let icon = Bundle.main.image(forResource: name)
+        icon?.isTemplate = true
+        icon?.size = NSSize(width: 18, height: 18)
+        return icon
+    }
+
     // MARK: - Text
 
     private func title() -> String {
@@ -191,9 +195,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func statusText() -> String {
         switch scheduler.phase {
         case .counting(let deadline):
-            return "다음 새우까지 약 \(Self.minutesLeft(until: deadline))분"
+            let posture = scheduler.posture == .sitting ? "앉아 있는 중" : "서 있는 중"
+            return "\(posture) · 다음 새우까지 약 \(Self.minutesLeft(until: deadline))분"
         case .alerting:
-            return "새우 출동 중! \(overlay.count)마리 — 일어나서 새우를 클릭하세요"
+            // 타이머가 울리는 순간 이미 다음 자세로 넘어가 있다.
+            let action = scheduler.posture == .standing ? "일어나서" : "앉아서"
+            return "새우 출동 중! \(overlay.count)마리 — \(action) 새우를 클릭하세요"
         case .paused:
             return "일시정지됨"
         case .away:

@@ -13,6 +13,14 @@ final class BreakScheduler {
         case away
     }
 
+    /// 이번 차례에 사용자가 취할 자세. 타이머가 울릴 때마다 교대된다 (앉음 → 섬 → 앉음 …).
+    enum Posture {
+        case sitting
+        case standing
+
+        var toggled: Posture { self == .sitting ? .standing : .sitting }
+    }
+
     /// 새우 한 마리를 내보내야 할 때 (알림 시작 + 이후 1분마다).
     var onSpawn: () -> Void = {}
     /// 화면의 새우를 모두 치워야 할 때.
@@ -23,6 +31,7 @@ final class BreakScheduler {
     private(set) var isUserPaused = false
     private(set) var isAway = false
     private(set) var isAlerting = false
+    private(set) var posture: Posture = .sitting
     private var deadline: Date?
     /// 일시정지 시점에 남아 있던 시간. nil 이면 재개 시 간격 전체로 새로 시작.
     private var pausedRemaining: TimeInterval?
@@ -83,10 +92,11 @@ final class BreakScheduler {
     }
 
     /// 화면 잠금·잠자기·장시간 무입력 = 자리를 비웠다(= 이미 일어났다).
-    /// 돌아오면 주기를 처음부터 다시 센다.
+    /// 돌아오면 자리에 다시 앉은 것으로 보고 주기를 처음부터 다시 센다.
     func setAway(_ away: Bool) {
         guard away != isAway else { return }
         isAway = away
+        if !away { posture = .sitting }
         if away {
             stopAll()
         } else if isUserPaused {
@@ -124,6 +134,7 @@ final class BreakScheduler {
         deadlineTimer = nil
         deadline = nil
         isAlerting = true
+        posture = posture.toggled
         onSpawn()
 
         escalationTimer?.invalidate()

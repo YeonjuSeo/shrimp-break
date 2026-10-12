@@ -1,16 +1,17 @@
-// 흰 배경 위 검정 실루엣 이미지를 메뉴바용 템플릿 아이콘(@1x/@2x PNG)으로 만든다.
-// 어두울수록 불투명한 검정이 되고, 흰 부분(배경·눈·마디 선)은 투명해진다.
+// 검정 실루엣 이미지(흰 배경 또는 투명 배경)를 메뉴바용 템플릿 아이콘(@1x/@2x PNG)으로 만든다.
+// 어두울수록 불투명한 검정이 되고, 흰 부분·투명 부분은 투명해진다.
 // macOS 는 템플릿 이미지의 알파만 보고 메뉴바 색(라이트/다크)에 맞춰 칠한다.
-// Usage: swift scripts/make_menubar_icon.swift <in.png> <out-dir>
+// Usage: swift scripts/make_menubar_icon.swift <in.png> <out-dir> <name>
+//   → <out-dir>/<name>.png (18px), <out-dir>/<name>@2x.png (36px)
 import AppKit
 import CoreGraphics
 
 let args = CommandLine.arguments
-guard args.count == 3,
+guard args.count == 4,
       let src = NSImage(contentsOfFile: args[1]),
       let cg = src.cgImage(forProposedRect: nil, context: nil, hints: nil)
 else {
-    FileHandle.standardError.write("usage: make_menubar_icon.swift <in.png> <out-dir>\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: make_menubar_icon.swift <in.png> <out-dir> <name>\n".data(using: .utf8)!)
     exit(1)
 }
 
@@ -21,11 +22,12 @@ let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPe
                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
 ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
 
-// 밝기 → 알파, 색은 검정 (premultiplied 이므로 RGB 는 0)
+// 밝기 → 알파, 색은 검정 (premultiplied 이므로 RGB 는 0).
+// premultiplied 버퍼에서 "원래 알파 × (1 - 원래 밝기)" = 알파 - premultiplied 밝기.
 var minX = w, minY = h, maxX = 0, maxY = 0
 for i in 0..<(w * h) {
     let luminance = (Int(px[i * 4]) * 299 + Int(px[i * 4 + 1]) * 587 + Int(px[i * 4 + 2]) * 114) / 1000
-    let alpha = UInt8(255 - luminance)
+    let alpha = UInt8(max(0, Int(px[i * 4 + 3]) - luminance))
     px[i * 4] = 0; px[i * 4 + 1] = 0; px[i * 4 + 2] = 0
     px[i * 4 + 3] = alpha
     if alpha > 8 {
@@ -51,5 +53,5 @@ func render(side: Int, to path: String) {
 }
 
 // 메뉴바 아이콘은 18pt 정사각.
-render(side: 18, to: "\(args[2])/MenuBarIcon.png")
-render(side: 36, to: "\(args[2])/MenuBarIcon@2x.png")
+render(side: 18, to: "\(args[2])/\(args[3]).png")
+render(side: 36, to: "\(args[2])/\(args[3])@2x.png")

@@ -25,7 +25,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/ShrimpBreak"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/shrimp.png" "$ROOT/Resources/tempura.png" \
-   "$ROOT/Resources/MenuBarIcon.png" "$ROOT/Resources/MenuBarIcon@2x.png" "$APP/Contents/Resources/"
+   "$ROOT"/Resources/MenuBarSitting*.png "$ROOT"/Resources/MenuBarStanding*.png "$APP/Contents/Resources/"
 
 echo "▶ app icon"
 ICONSET="$(mktemp -d)/AppIcon.iconset"

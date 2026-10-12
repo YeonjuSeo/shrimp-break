@@ -13,6 +13,7 @@ open ShrimpBreak.app
 
 ```bash
 swift scripts/cutout.swift assets-src/shrimp-original.png Resources/shrimp.png
+swift scripts/make_menubar_icon.swift assets-src/menubar-sitting-original.png Resources MenuBarSitting
 ```
 
 ## 동작
@@ -22,6 +23,7 @@ swift scripts/cutout.swift assets-src/shrimp-original.png Resources/shrimp.png
 - 여러 모니터를 넘나든다: 이웃 모니터가 있는 경계는 통과(바닥이 더 높으면 점프해서 올라탐), 바깥 끝은 벽
 - 아무 새우나 한 번 클릭 = 자세 바꿈 → 전부 사라지고 다음 주기 시작
 - 일시정지 토글
+- 메뉴바 아이콘: 타이머 차례마다 앉은 사람 ↔ 선 사람 교대 (시작은 앉음, 타이머가 울리는 순간 다음 자세로)
 - 자리 비움(화면 잠금·잠자기·디스플레이 꺼짐·N분 무입력) → 타이머 정지, 돌아오면 처음부터 다시 셈
 
 ## 공유하기
