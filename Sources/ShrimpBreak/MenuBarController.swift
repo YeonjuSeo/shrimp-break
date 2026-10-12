@@ -4,6 +4,27 @@ import ServiceManagement
 /// 메뉴바 아이콘과 메뉴.
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
+    /// 시간을 고르는 하위 메뉴가 어떤 타이머를 바꾸는지.
+    private enum TimerTarget: Int {
+        case single, sitting, standing
+
+        var label: String {
+            switch self {
+            case .single: return "알림 간격"
+            case .sitting: return "앉아 있는 시간"
+            case .standing: return "서 있는 시간"
+            }
+        }
+
+        @MainActor var minutes: Int {
+            switch self {
+            case .single: return Settings.intervalMinutes
+            case .sitting: return Settings.sittingMinutes
+            case .standing: return Settings.standingMinutes
+            }
+        }
+    }
+
     private let scheduler: BreakScheduler
     private let presence: PresenceMonitor
     private let overlay: ShrimpOverlay
@@ -55,7 +76,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         #endif
         menu.addItem(.separator())
 
-        menu.addItem(intervalMenuItem())
+        let separate = item("앉기·서기 시간 따로 설정", #selector(handleToggleSeparateTimers))
+        separate.state = Settings.usesSeparatePostureTimers ? .on : .off
+        menu.addItem(separate)
+        if Settings.usesSeparatePostureTimers {
+            menu.addItem(durationMenuItem(for: .sitting))
+            menu.addItem(durationMenuItem(for: .standing))
+        } else {
+            menu.addItem(durationMenuItem(for: .single))
+        }
+        menu.addItem(.separator())
+
         menu.addItem(awayMenuItem())
 
         let login = item("로그인 시 자동 실행", #selector(handleToggleLaunchAtLogin))
@@ -74,23 +105,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return item
     }
 
-    private func intervalMenuItem() -> NSMenuItem {
-        let current = Settings.intervalMinutes
+    private func durationMenuItem(for target: TimerTarget) -> NSMenuItem {
+        let current = target.minutes
         let submenu = NSMenu()
         for minutes in Settings.presetIntervals {
-            let option = item(Self.durationText(minutes), #selector(handleSelectInterval(_:)))
+            let option = item(Self.durationText(minutes), #selector(handleSelectDuration(_:)))
             option.tag = minutes
+            option.representedObject = target.rawValue
             option.state = minutes == current ? .on : .off
             submenu.addItem(option)
         }
         submenu.addItem(.separator())
         let isCustom = !Settings.presetIntervals.contains(current)
         let custom = item(isCustom ? "직접 입력… (\(Self.durationText(current)))" : "직접 입력…",
-                          #selector(handleCustomInterval))
+                          #selector(handleCustomDuration(_:)))
+        custom.representedObject = target.rawValue
         custom.state = isCustom ? .on : .off
         submenu.addItem(custom)
 
-        let parent = NSMenuItem(title: "알림 간격: \(Self.durationText(current))", action: nil, keyEquivalent: "")
+        let parent = NSMenuItem(title: "\(target.label): \(Self.durationText(current))", action: nil, keyEquivalent: "")
         parent.submenu = submenu
         return parent
     }
@@ -127,16 +160,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
     #endif
 
-    @objc private func handleSelectInterval(_ sender: NSMenuItem) {
-        scheduler.setInterval(minutes: sender.tag)
+    @objc private func handleToggleSeparateTimers() {
+        scheduler.setSeparatePostureTimers(!Settings.usesSeparatePostureTimers)
     }
 
-    @objc private func handleCustomInterval() {
+    @objc private func handleSelectDuration(_ sender: NSMenuItem) {
+        guard let target = Self.timerTarget(of: sender) else { return }
+        apply(minutes: sender.tag, to: target)
+    }
+
+    @objc private func handleCustomDuration(_ sender: NSMenuItem) {
+        guard let target = Self.timerTarget(of: sender) else { return }
         let alert = NSAlert()
-        alert.messageText = "알림 간격 직접 입력"
-        alert.informativeText = "몇 분마다 새우를 부를까요? (1 ~ 480분)"
+        alert.messageText = "\(target.label) 직접 입력"
+        alert.informativeText = switch target {
+        case .single: "몇 분마다 새우를 부를까요? (1 ~ 480분)"
+        case .sitting: "몇 분 앉아 있다가 일어날까요? (1 ~ 480분)"
+        case .standing: "몇 분 서 있다가 앉을까요? (1 ~ 480분)"
+        }
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        field.stringValue = "\(Settings.intervalMinutes)"
+        field.stringValue = "\(target.minutes)"
         alert.accessoryView = field
         alert.addButton(withTitle: "확인")
         alert.addButton(withTitle: "취소")
@@ -149,7 +192,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             NSSound.beep()
             return
         }
-        scheduler.setInterval(minutes: minutes)
+        apply(minutes: minutes, to: target)
+    }
+
+    private func apply(minutes: Int, to target: TimerTarget) {
+        switch target {
+        case .single: scheduler.setInterval(minutes: minutes)
+        case .sitting: scheduler.setMinutes(minutes, for: .sitting)
+        case .standing: scheduler.setMinutes(minutes, for: .standing)
+        }
+    }
+
+    private static func timerTarget(of item: NSMenuItem) -> TimerTarget? {
+        (item.representedObject as? Int).flatMap(TimerTarget.init(rawValue:))
     }
 
     @objc private func handleSelectAway(_ sender: NSMenuItem) {

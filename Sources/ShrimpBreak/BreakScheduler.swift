@@ -49,7 +49,8 @@ final class BreakScheduler {
         return .paused
     }
 
-    private var interval: TimeInterval { TimeInterval(Settings.intervalMinutes * 60) }
+    /// 이번 차례(지금 자세)의 길이.
+    private var interval: TimeInterval { TimeInterval(Settings.minutes(for: posture) * 60) }
     private var isActive: Bool { !isUserPaused && !isAway }
 
     func start() {
@@ -69,13 +70,34 @@ final class BreakScheduler {
     }
     #endif
 
+    /// 타이머 한 개 모드의 간격.
     func setInterval(minutes: Int) {
-        Settings.intervalMinutes = minutes
-        if isUserPaused {
-            pausedRemaining = nil
-            onChange()
-        } else {
-            restartCycle()
+        applyTimerChange { Settings.intervalMinutes = minutes }
+    }
+
+    /// 타이머 두 개 모드의 자세별 시간.
+    func setMinutes(_ minutes: Int, for target: Posture) {
+        applyTimerChange {
+            switch target {
+            case .sitting: Settings.sittingMinutes = minutes
+            case .standing: Settings.standingMinutes = minutes
+            }
+        }
+    }
+
+    /// 타이머 한 개 ↔ 두 개 전환.
+    /// - 한 개 → 두 개: 앉음·섬 모두 지금 간격으로 채운다.
+    /// - 두 개 → 한 개: 서 있는 시간을 간격으로 쓴다.
+    func setSeparatePostureTimers(_ isOn: Bool) {
+        guard isOn != Settings.usesSeparatePostureTimers else { return }
+        applyTimerChange {
+            if isOn {
+                Settings.sittingMinutes = Settings.intervalMinutes
+                Settings.standingMinutes = Settings.intervalMinutes
+            } else {
+                Settings.intervalMinutes = Settings.standingMinutes
+            }
+            Settings.usesSeparatePostureTimers = isOn
         }
     }
 
@@ -111,6 +133,24 @@ final class BreakScheduler {
     }
 
     // MARK: - Private
+
+    /// 타이머 설정을 바꾼다. 이번 차례의 길이가 바뀌었을 때만 카운트다운을 새로 시작하고,
+    /// 다음 차례에만 영향을 주는 변경(예: 앉아 있는 중에 서 있는 시간 변경)은 진행 중인 카운트다운을 유지한다.
+    private func applyTimerChange(_ change: () -> Void) {
+        let before = interval
+        change()
+        // 알림 중이면 다음 차례는 새우를 클릭할 때 새 값으로 시작한다 (설정 변경이 클릭을 대신하지 않도록).
+        guard interval != before, !isAlerting else {
+            onChange()
+            return
+        }
+        if isUserPaused {
+            pausedRemaining = nil
+            onChange()
+        } else {
+            restartCycle()
+        }
+    }
 
     private func restartCycle() {
         stopAll()
