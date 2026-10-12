@@ -3,19 +3,27 @@
 # Usage: scripts/make_app.sh [debug|release]   (default: release)
 #   release: Apple Silicon + Intel 유니버설 바이너리 (다른 사람에게 공유 가능)
 #   debug:   이 Mac 아키텍처만 (빠른 빌드)
+# 환경 변수
+#   DEV_TOOLS=1  메뉴에 "지금 새우 부르기 (테스트)" 포함 (본인 확인용). 기본은 미포함.
+#   APP_PATH=…   .app 을 만들 위치 (기본: 프로젝트 루트의 ShrimpBreak.app)
 set -euo pipefail
 
 CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/ShrimpBreak.app"
+APP="${APP_PATH:-$ROOT/ShrimpBreak.app}"
+SWIFT_FLAGS=()
+if [ "${DEV_TOOLS:-0}" = "1" ]; then
+  echo "▶ dev tools ON (지금 새우 부르기 포함)"
+  SWIFT_FLAGS=(-Xswiftc -DSHRIMP_DEV_TOOLS)
+fi
 
 if [ "$CONFIG" = "release" ]; then
   echo "▶ swift build -c release (arm64 + x86_64)"
-  swift build -c release --arch arm64 --arch x86_64 --package-path "$ROOT"
+  swift build -c release --arch arm64 --arch x86_64 --package-path "$ROOT" ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"}
   BIN="$ROOT/.build/apple/Products/Release/ShrimpBreak"
 else
   echo "▶ swift build -c $CONFIG"
-  swift build -c "$CONFIG" --package-path "$ROOT"
+  swift build -c "$CONFIG" --package-path "$ROOT" ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"}
   BIN="$ROOT/.build/$CONFIG/ShrimpBreak"
 fi
 

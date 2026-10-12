@@ -61,11 +61,13 @@ final class BreakScheduler {
         restartCycle()
     }
 
+    #if SHRIMP_DEV_TOOLS
     /// 테스트용: 지금 바로 알림.
     func triggerNow() {
         guard isActive else { return }
         fire()
     }
+    #endif
 
     func setInterval(minutes: Int) {
         Settings.intervalMinutes = minutes

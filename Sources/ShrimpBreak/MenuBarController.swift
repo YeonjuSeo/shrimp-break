@@ -47,9 +47,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         pause.state = scheduler.isUserPaused ? .on : .off
         menu.addItem(pause)
 
+        #if SHRIMP_DEV_TOOLS
+        // 본인 확인용 빌드에만 들어간다 (scripts/make_app.sh 의 DEV_TOOLS=1). 공유용 zip 에는 없다.
         let summon = item("지금 새우 부르기 (테스트)", #selector(handleSummonNow), key: "t")
         summon.isEnabled = scheduler.phase != .paused && scheduler.phase != .away
         menu.addItem(summon)
+        #endif
         menu.addItem(.separator())
 
         menu.addItem(intervalMenuItem())
@@ -118,9 +121,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         scheduler.setPaused(!scheduler.isUserPaused)
     }
 
+    #if SHRIMP_DEV_TOOLS
     @objc private func handleSummonNow() {
         if scheduler.phase == .alerting { overlay.spawn() } else { scheduler.triggerNow() }
     }
+    #endif
 
     @objc private func handleSelectInterval(_ sender: NSMenuItem) {
         scheduler.setInterval(minutes: sender.tag)

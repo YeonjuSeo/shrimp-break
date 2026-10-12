@@ -5,7 +5,7 @@ N분마다 화면 바닥에서 새우가 튀어나와 "일어나서 자세 바�
 ## 빌드 / 실행
 
 ```bash
-scripts/make_app.sh          # → ShrimpBreak.app
+DEV_TOOLS=1 scripts/make_app.sh   # → ShrimpBreak.app (본인용: "지금 새우 부르기" 테스트 메뉴 포함)
 open ShrimpBreak.app
 ```
 
@@ -31,7 +31,7 @@ swift scripts/make_menubar_icon.swift assets-src/menubar-sitting-original.png Re
 ### A. 인증서 없이 지인에게 (무료)
 
 ```bash
-scripts/package.sh            # → dist/ShrimpBreak.zip (Apple Silicon + Intel)
+scripts/package.sh            # → dist/ShrimpBreak.zip (Apple Silicon + Intel, 테스트 메뉴 없음)
 ```
 
 받는 사람: zip 풀기 → `ShrimpBreak.app` 을 응용 프로그램 폴더로 옮기기 → 더블클릭.
