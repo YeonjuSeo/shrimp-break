@@ -130,11 +130,9 @@ namespace ShrimpBreak
                 return;
             }
 
-            foreach (var sprite in shrimps)
-            {
-                ShrimpPhysics.Move(sprite.Body, dt, stages);
-                Render(sprite, force: false);
-            }
+            foreach (var sprite in shrimps) ShrimpPhysics.Move(sprite.Body, dt, stages);
+            ShrimpPhysics.Collide(shrimps.Select(sprite => sprite.Body).ToList()); // 새우끼리 부딪히면 튕긴다
+            foreach (var sprite in shrimps) Render(sprite, force: false);
         }
 
         void Render(Sprite sprite, bool force)

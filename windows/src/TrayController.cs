@@ -140,6 +140,7 @@ namespace ShrimpBreak
             durationItems = MakeDurationItems();
             durationSignature = CurrentDurationSignature();
             menu.Items.AddRange(durationItems);
+            menu.Items.Add(EscalationSlider());
             menu.Items.Add(new ToolStripSeparator());
 
             menu.Items.Add(AwayMenu());
@@ -189,6 +190,57 @@ namespace ShrimpBreak
             for (var i = 0; i < durationItems.Length; i++) menu.Items.Insert(insertAt + i, durationItems[i]);
             menu.ResumeLayout();
         }
+
+        /// <summary>
+        /// "새우 증식 속도" 슬라이더 행 (3초 ~ 1분). 메뉴 안에 컨트롤을 넣은 것이라 눌러도 메뉴가 닫히지 않는다.
+        /// 끄는 동안은 글자만 바뀌고, 손을 뗄 때 한 번 적용한다 (끄는 내내 설정 저장·통계 기록을 하지 않도록).
+        /// </summary>
+        ToolStripControlHost EscalationSlider()
+        {
+            var panel = new Panel { BackColor = menu.BackColor, Margin = Padding.Empty, Padding = Padding.Empty };
+            var label = new Label { AutoSize = true, Text = EscalationText(Settings.EscalationSeconds), BackColor = menu.BackColor };
+            var minLabel = new Label { AutoSize = true, Text = $"{Settings.MinEscalationSeconds}초", ForeColor = System.Drawing.SystemColors.GrayText, BackColor = menu.BackColor };
+            var maxLabel = new Label { AutoSize = true, Text = "1분", ForeColor = System.Drawing.SystemColors.GrayText, BackColor = menu.BackColor };
+            var slider = new TrackBar
+            {
+                Minimum = Settings.MinEscalationSeconds,
+                Maximum = Settings.MaxEscalationSeconds,
+                Value = Settings.EscalationSeconds,
+                SmallChange = 1,
+                LargeChange = 5,
+                TickStyle = TickStyle.None,
+                AutoSize = false,
+                BackColor = menu.BackColor,
+            };
+            panel.Controls.AddRange(new Control[] { label, minLabel, slider, maxLabel });
+
+            // 화면 배율에 맞춰 배치 (menu.LogicalToDeviceUnits: 100% 기준 값을 지금 배율로).
+            int U(int value) => menu.LogicalToDeviceUnits(value);
+            var width = U(280);
+            label.Location = new System.Drawing.Point(U(30), U(4));
+            var sliderTop = label.Bottom + U(2);
+            minLabel.Location = new System.Drawing.Point(U(30), sliderTop + U(4));
+            maxLabel.Location = new System.Drawing.Point(width - U(12) - maxLabel.PreferredWidth, sliderTop + U(4));
+            slider.Location = new System.Drawing.Point(minLabel.Location.X + minLabel.PreferredWidth + U(4), sliderTop);
+            slider.Size = new System.Drawing.Size(maxLabel.Location.X - U(4) - slider.Location.X, U(26));
+            panel.Size = new System.Drawing.Size(width, slider.Bottom + U(4));
+
+            var committed = Settings.EscalationSeconds;
+            void Commit()
+            {
+                if (slider.Value == committed) return;
+                committed = slider.Value;
+                scheduler.SetEscalationSeconds(committed);
+            }
+            slider.Scroll += (_, __) => label.Text = EscalationText(slider.Value);
+            slider.MouseUp += (_, __) => Commit();
+            slider.KeyUp += (_, __) => Commit();
+
+            return new ToolStripControlHost(panel) { AutoSize = false, Size = panel.Size, Margin = Padding.Empty, Padding = Padding.Empty };
+        }
+
+        static string EscalationText(int seconds) =>
+            "새우 증식 속도: " + (seconds >= 60 ? "1분마다" : $"{seconds}초마다") + " 한 마리";
 
         static ToolStripMenuItem Item(string text, Action onClick, bool isChecked = false)
             => new ToolStripMenuItem(text, null, (_, __) => onClick()) { Checked = isChecked };

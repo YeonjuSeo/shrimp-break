@@ -585,7 +585,7 @@ namespace ShrimpBreak
         sealed class SettingsSnapshot
         {
             public bool Separate;
-            public int Interval, Sitting, Standing, Away;
+            public int Interval, Sitting, Standing, Away, Escalation;
 
             public static SettingsSnapshot Current() => new SettingsSnapshot
             {
@@ -594,6 +594,7 @@ namespace ShrimpBreak
                 Sitting = Settings.SittingMinutes,
                 Standing = Settings.StandingMinutes,
                 Away = Settings.AwayThresholdMinutes,
+                Escalation = Settings.EscalationSeconds,
             };
 
             public Dictionary<string, object> Fields() => new Dictionary<string, object>
@@ -603,6 +604,7 @@ namespace ShrimpBreak
                 ["sitting_minutes"] = Sitting,
                 ["standing_minutes"] = Standing,
                 ["away_threshold"] = Away,
+                ["escalation_seconds"] = Escalation,
             };
 
             public List<(string field, string from, string to)> Changes(SettingsSnapshot previous)
@@ -619,6 +621,7 @@ namespace ShrimpBreak
                 Add("sitting_minutes", previous.Sitting, Sitting);
                 Add("standing_minutes", previous.Standing, Standing);
                 Add("away_threshold", previous.Away, Away);
+                Add("escalation_seconds", previous.Escalation, Escalation);
                 return result;
             }
 
@@ -627,7 +630,7 @@ namespace ShrimpBreak
                 try
                 {
                     Directory.CreateDirectory(Folder);
-                    File.WriteAllText(path, $"{Separate}|{Interval}|{Sitting}|{Standing}|{Away}");
+                    File.WriteAllText(path, $"{Separate}|{Interval}|{Sitting}|{Standing}|{Away}|{Escalation}");
                 }
                 catch
                 {
@@ -647,6 +650,8 @@ namespace ShrimpBreak
                         Sitting = int.Parse(parts[2], CultureInfo.InvariantCulture),
                         Standing = int.Parse(parts[3], CultureInfo.InvariantCulture),
                         Away = int.Parse(parts[4], CultureInfo.InvariantCulture),
+                        // 증식 속도 설정이 생기기 전에 저장된 파일에는 6번째 값이 없다 → 기본값 60
+                        Escalation = parts.Length > 5 ? int.Parse(parts[5], CultureInfo.InvariantCulture) : Settings.MaxEscalationSeconds,
                     };
                 }
                 catch

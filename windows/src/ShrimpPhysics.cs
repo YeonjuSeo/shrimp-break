@@ -145,6 +145,73 @@ namespace ShrimpBreak
             }
         }
 
+        /// <summary>충돌 판정용 원의 반지름 (새우 그림이 정사각 칸을 다 채우지 않아서 조금 작게).</summary>
+        public const double CollisionRadiusRatio = 0.38;
+
+        /// <summary>
+        /// 새우끼리 부딪히면 튕긴다. 몸을 원으로 보고, 겹친 만큼 서로 밀어낸 뒤
+        /// 부딪힌 방향(법선)으로 속도를 주고받는다 (같은 무게의 완전 탄성 충돌).
+        /// 충돌로 옆 속도가 거의 0 이 되면 계속 제자리에서만 튀므로 최소 옆 속도를 지킨다.
+        /// 최대 40마리라 모든 쌍을 비교해도 프레임당 780번이면 충분히 가볍다.
+        /// </summary>
+        public static void Collide(IList<ShrimpBody> shrimps)
+        {
+            for (var i = 0; i < shrimps.Count; i++)
+            {
+                for (var j = i + 1; j < shrimps.Count; j++)
+                {
+                    var a = shrimps[i];
+                    var b = shrimps[j];
+                    var ra = a.Size * CollisionRadiusRatio;
+                    var rb = b.Size * CollisionRadiusRatio;
+                    var dx = (b.X + b.Size / 2) - (a.X + a.Size / 2);
+                    var dy = (b.Y + b.Size / 2) - (a.Y + a.Size / 2);
+                    var distance = Math.Sqrt(dx * dx + dy * dy);
+                    var minDistance = ra + rb;
+                    if (distance >= minDistance) continue;
+
+                    // 완전히 겹친 경우엔 아무 방향으로나 떼어 낸다.
+                    double nx, ny;
+                    if (distance < 1e-6)
+                    {
+                        nx = 1;
+                        ny = 0;
+                        distance = 0;
+                    }
+                    else
+                    {
+                        nx = dx / distance;
+                        ny = dy / distance;
+                    }
+
+                    // 1) 겹친 만큼 반씩 밀어낸다.
+                    var push = (minDistance - distance) / 2;
+                    a.X -= nx * push;
+                    a.Y -= ny * push;
+                    b.X += nx * push;
+                    b.Y += ny * push;
+
+                    // 2) 서로 다가오는 중일 때만 법선 방향 속도를 맞바꾼다.
+                    var approaching = (b.Vx - a.Vx) * nx + (b.Vy - a.Vy) * ny;
+                    if (approaching < 0)
+                    {
+                        a.Vx += approaching * nx;
+                        a.Vy += approaching * ny;
+                        b.Vx -= approaching * nx;
+                        b.Vy -= approaching * ny;
+                        KeepMinimumSpeed(a);
+                        KeepMinimumSpeed(b);
+                    }
+                }
+            }
+        }
+
+        static void KeepMinimumSpeed(ShrimpBody shrimp)
+        {
+            var minimum = MinSpeedPoints * shrimp.Home.Scale;
+            if (Math.Abs(shrimp.Vx) < minimum) shrimp.Vx = shrimp.Vx < 0 ? -minimum : minimum;
+        }
+
         /// <summary>-1(떨어지는 중) ~ 1(오르는 중). 그림을 기울이는 데 쓴다.</summary>
         public static double Lift(ShrimpBody shrimp)
             => Math.Max(-1, Math.Min(1, shrimp.Vy / shrimp.BounceVelocity));

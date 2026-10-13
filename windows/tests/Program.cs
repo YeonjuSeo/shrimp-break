@@ -32,6 +32,8 @@ static class Program
         var gapB = StageGeometry.FromScreen("gapB", 2000, 3920, 0, 1040, 1.0, 3.6);
         RunScenario("모니터 사이 틈", new[] { gapA, gapB }, expectCrossing: false);
 
+        RunCollisionTests();
+
         Console.WriteLine(failures == 0 ? "\n✓ 모든 시나리오 통과" : $"\n✗ 실패 {failures}건");
         return failures == 0 ? 0 : 1;
     }
@@ -91,6 +93,72 @@ static class Program
         {
             Check(name, "모니터를 넘지 않음", crossings.Count == 0, crossingText);
         }
+    }
+
+    /// <summary>새우끼리 충돌: 정면충돌·겹침 해소·최소 속도·여러 마리 오래 돌려도 겹치지 않음.</summary>
+    static void RunCollisionTests()
+    {
+        const string name = "새우끼리 충돌";
+        var stage = StageGeometry.FromScreen("single", 0, 1920, 0, 1040, 1.0, 3.6);
+        ShrimpBody Body(double x, double vx) => new ShrimpBody
+        {
+            X = x, Y = stage.Floor, Vx = vx, Vy = 0, Size = 180, Gravity = 1664, BounceVelocity = 700, Home = stage,
+        };
+
+        // 정면으로 다가오는 두 마리 → 방향이 바뀐다
+        var a = Body(500, 200);
+        var b = Body(600, -200);
+        ShrimpPhysics.Collide(new List<ShrimpBody> { a, b });
+        Console.WriteLine($"[{name}] 정면충돌 후 속도: a {a.Vx:F0}, b {b.Vx:F0}");
+        Check(name, "정면충돌하면 서로 반대로 튕김", a.Vx < 0 && b.Vx > 0, $"a {a.Vx}, b {b.Vx}");
+        var gap = (b.X + b.Size / 2) - (a.X + a.Size / 2);
+        Check(name, "겹친 만큼 밀어냄", gap >= 2 * 180 * ShrimpPhysics.CollisionRadiusRatio - 0.01, $"중심 거리 {gap:F1}");
+
+        // 같은 방향, 앞의 것이 느림 → 뒤의 것이 느려져도 최소 속도는 유지
+        var slow = Body(600, 130);
+        var fast = Body(500, 250);
+        ShrimpPhysics.Collide(new List<ShrimpBody> { fast, slow });
+        Check(name, "충돌 뒤에도 최소 옆 속도 유지", Math.Abs(fast.Vx) >= ShrimpPhysics.MinSpeedPoints - 0.01 && Math.Abs(slow.Vx) >= ShrimpPhysics.MinSpeedPoints - 0.01,
+              $"fast {fast.Vx:F0}, slow {slow.Vx:F0}");
+
+        // 멀어지는 중이면 속도를 바꾸지 않는다 (겹침만 해소)
+        var left = Body(500, -200);
+        var right = Body(560, 200);
+        ShrimpPhysics.Collide(new List<ShrimpBody> { left, right });
+        Check(name, "멀어지는 중이면 속도 그대로", left.Vx == -200 && right.Vx == 200, $"{left.Vx}, {right.Vx}");
+
+        // 40마리를 2분 돌리면서 매 프레임 충돌 처리 → 끝났을 때 깊게 겹친 쌍이 거의 없어야 한다
+        var stages = new[] { stage };
+        var random = new Random(7);
+        var shrimps = Enumerable.Range(0, 40).Select(_ => ShrimpPhysics.Spawn(stage, random)).ToList();
+        var maxOverlapRatio = 0.0;
+        var maxOutside = 0.0;
+        var maxBelowFloor = 0.0;
+        for (var t = 0.0; t < Seconds; t += Dt)
+        {
+            foreach (var s in shrimps) ShrimpPhysics.Move(s, Dt, stages);
+            ShrimpPhysics.Collide(shrimps);
+            if (t < 5) continue; // 처음 솟아오르는 동안은 제외
+            foreach (var s in shrimps)
+            {
+                maxOutside = Math.Max(maxOutside, Math.Max(stage.MinX - s.X, s.X + s.Size - stage.MaxX));
+                maxBelowFloor = Math.Max(maxBelowFloor, stage.Floor - s.Y);
+            }
+            for (var i = 0; i < shrimps.Count; i++)
+                for (var j = i + 1; j < shrimps.Count; j++)
+                {
+                    var p = shrimps[i];
+                    var q = shrimps[j];
+                    var d = Math.Sqrt(Math.Pow(p.X - q.X, 2) + Math.Pow(p.Y - q.Y, 2));
+                    var min = (p.Size + q.Size) * ShrimpPhysics.CollisionRadiusRatio;
+                    maxOverlapRatio = Math.Max(maxOverlapRatio, (min - d) / min);
+                }
+        }
+        Console.WriteLine($"[{name}] 40마리 2분: 최대 겹침 {maxOverlapRatio:P0}, 벽 밖으로 최대 {maxOutside:F0}px, 바닥 아래로 최대 {maxBelowFloor:F0}px");
+        Check(name, "40마리가 서로 깊게 파고들지 않음 (겹침 50% 미만)", maxOverlapRatio < 0.5, $"{maxOverlapRatio:P0}");
+        // 밀려난 만큼은 다음 프레임에 벽·바닥 처리로 바로 되돌아온다 → 새우 크기(180px)의 1/4 이내면 눈에 띄지 않는다.
+        Check(name, "충돌로 벽 밖으로 크게 밀려나지 않음", maxOutside < 45, $"{maxOutside:F0}px");
+        Check(name, "충돌로 바닥 아래로 크게 밀려나지 않음", maxBelowFloor < 45, $"{maxBelowFloor:F0}px");
     }
 
     static void Check(string scenario, string what, bool ok, string detail)

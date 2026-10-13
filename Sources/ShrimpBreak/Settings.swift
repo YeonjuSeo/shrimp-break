@@ -38,6 +38,16 @@ enum Settings {
         return posture == .sitting ? sittingMinutes : standingMinutes
     }
 
+    /// 새우를 클릭하지 않으면 몇 초마다 한 마리씩 늘어나는지. 3 ~ 60초, 기본 60초.
+    static let escalationRange = 3...60
+    static var escalationSeconds: Int {
+        get {
+            let value = defaults.integer(forKey: "escalationSeconds")
+            return value > 0 ? min(max(value, escalationRange.lowerBound), escalationRange.upperBound) : 60
+        }
+        set { defaults.set(newValue, forKey: "escalationSeconds") }
+    }
+
     /// 이 시간(분) 이상 키보드·마우스 입력이 없으면 "자리를 비웠다(=일어났다)"로 본다. 0 이면 끔.
     static var awayThresholdMinutes: Int {
         get {

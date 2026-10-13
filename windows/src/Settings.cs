@@ -48,6 +48,20 @@ namespace ShrimpBreak
             return posture == Posture.Sitting ? SittingMinutes : StandingMinutes;
         }
 
+        /// <summary>새우를 클릭하지 않으면 몇 초마다 한 마리씩 늘어나는지. 3 ~ 60초, 기본 60초.</summary>
+        public const int MinEscalationSeconds = 3;
+        public const int MaxEscalationSeconds = 60;
+
+        public static int EscalationSeconds
+        {
+            get
+            {
+                var value = ReadInt("EscalationSeconds", MaxEscalationSeconds);
+                return Math.Min(MaxEscalationSeconds, Math.Max(MinEscalationSeconds, value));
+            }
+            set => Write("EscalationSeconds", value);
+        }
+
         /// <summary>이 시간(분) 이상 키보드·마우스 입력이 없으면 "자리를 비웠다(=일어났다)"로 본다. 0 이면 끔.</summary>
         public static int AwayThresholdMinutes
         {

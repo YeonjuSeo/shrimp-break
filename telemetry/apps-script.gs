@@ -19,6 +19,8 @@ const MAX_EVENTS_PER_REQUEST = 50;
 const INSTALL_COLUMNS = [
   'received_at', 'id', 'date', 'os', 'os_version', 'app_version', 'build', 'locale', 'monitors', 'max_scale',
   'separate_timers', 'interval_minutes', 'sitting_minutes', 'standing_minutes', 'away_threshold',
+  // 새 칸은 이미 만들어진 시트와 열 순서가 어긋나지 않도록 항상 맨 끝에 덧붙인다.
+  'escalation_seconds',
 ];
 
 const CONSENT_COLUMNS = [
@@ -38,6 +40,8 @@ const DAILY_COLUMNS = [
   'avg_reaction_sec', 'max_reaction_sec', 'sat_minutes', 'stood_minutes', 'pauses', 'paused_minutes',
   'away_count', 'quick_restart', 'quick_sit', 'quick_stand', 'errors',
   ...HOUR_COLUMNS,
+  // 새 칸은 이미 만들어진 시트와 열 순서가 어긋나지 않도록 항상 맨 끝에 덧붙인다.
+  'escalation_seconds',
 ];
 
 // 숫자처럼 보여도 글자로 남겨야 하는 열 (예: 26.6 이 숫자로 바뀌지 않도록)
@@ -84,7 +88,13 @@ function handleEvent(book, event) {
 
 function sheetFor(book, name, columns) {
   let sheet = book.getSheetByName(name);
-  if (!sheet) {
+  if (sheet) {
+    // 코드에 새 칸이 생겼으면 기존 탭 머리글 끝에 이어 붙인다.
+    const width = sheet.getLastColumn();
+    if (width < columns.length) {
+      sheet.getRange(1, width + 1, 1, columns.length - width).setValues([columns.slice(width)]);
+    }
+  } else {
     sheet = book.insertSheet(name);
     sheet.appendRow(columns);
     sheet.setFrozenRows(1);
@@ -195,6 +205,7 @@ function buildDashboard(book) {
     ['자리 비움 발생 (총 횟수)', `=SUMIFS(${d('away_count')},${release})`],
     ['여러 모니터 사용 비율', `=IFERROR(COUNTIFS(${d('monitors')},">1",${release})/COUNTIFS(${release}),0)`],
     ['오류 (Windows, 총 횟수)', `=SUMIFS(${d('errors')},${release})`],
+    ['평균 새우 증식 간격 (초)', `=IFERROR(AVERAGEIFS(${d('escalation_seconds')},${release},${d('escalation_seconds')},">0"),0)`],
   ];
   sheet.getRange(1, 1, rows.length, 2).setValues(rows);
 

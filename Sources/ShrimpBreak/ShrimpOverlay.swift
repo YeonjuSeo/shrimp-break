@@ -35,6 +35,10 @@ final class ShrimpOverlay: NSObject {
     private static let maxShrimps = 40
     /// 낮을수록 같은 높이를 더 천천히 오르내린다 (통통 튀는 리듬).
     private static let gravity: CGFloat = 1664 // pt/s² — 처음 값(2600)의 0.8² → 같은 높이를 0.8배 속도로
+    private static let minSpeed: CGFloat = 128 // pt/s — 옆으로 가는 최소 속도
+    private static let maxSpeed: CGFloat = 256
+    /// 충돌 판정용 원의 반지름 (새우 그림이 정사각 칸을 다 채우지 않아서 조금 작게).
+    private static let collisionRadiusRatio: CGFloat = 0.38
     /// 더 높은 이웃 모니터로 올라탈 때, 그 바닥보다 이만큼 더 높이 뛴다 (새우 크기 대비).
     private static let climbMarginRatio: CGFloat = 0.8
     /// 이보다 더 높이 올라가야 하는 경계는 벽으로 취급한다.
@@ -69,7 +73,7 @@ final class ShrimpOverlay: NSObject {
             home: home,
             x: CGFloat.random(in: home.frame.minX...max(home.frame.minX + 1, home.frame.maxX - size)),
             y: home.frame.minY - size,
-            vx: CGFloat.random(in: 128...256) * (Bool.random() ? 1 : -1),
+            vx: CGFloat.random(in: Self.minSpeed...Self.maxSpeed) * (Bool.random() ? 1 : -1),
             vy: sqrt(2 * Self.gravity * (peak + size)),
             bounceVelocity: sqrt(2 * Self.gravity * peak)
         )
@@ -176,8 +180,53 @@ final class ShrimpOverlay: NSObject {
         lastTimestamp = now
 
         shrimps.forEach { move($0, dt: dt) }
+        collide()
         render()
         updateMousePassThrough()
+    }
+
+    /// 새우끼리 부딪히면 튕긴다 (Windows 버전 ShrimpPhysics.Collide 와 같은 규칙, 그쪽에 시뮬레이션 테스트가 있다).
+    /// 몸을 원으로 보고, 겹친 만큼 서로 밀어낸 뒤 부딪힌 방향(법선)으로 속도를 주고받는다 (같은 무게의 완전 탄성 충돌).
+    /// 충돌로 옆 속도가 거의 0 이 되면 제자리에서만 튀므로 최소 옆 속도를 지킨다.
+    /// 최대 40마리라 모든 쌍을 비교해도 프레임당 780번이면 충분히 가볍다.
+    private func collide() {
+        for i in shrimps.indices {
+            for j in shrimps.indices where j > i {
+                let a = shrimps[i], b = shrimps[j]
+                let minDistance = (a.size + b.size) * Self.collisionRadiusRatio
+                let dx = (b.x + b.size / 2) - (a.x + a.size / 2)
+                let dy = (b.y + b.size / 2) - (a.y + a.size / 2)
+                var distance = (dx * dx + dy * dy).squareRoot()
+                guard distance < minDistance else { continue }
+
+                // 완전히 겹친 경우엔 아무 방향으로나 떼어 낸다.
+                let (nx, ny): (CGFloat, CGFloat)
+                if distance < 1e-6 {
+                    (nx, ny) = (1, 0)
+                    distance = 0
+                } else {
+                    (nx, ny) = (dx / distance, dy / distance)
+                }
+
+                // 1) 겹친 만큼 반씩 밀어낸다.
+                let push = (minDistance - distance) / 2
+                a.x -= nx * push
+                a.y -= ny * push
+                b.x += nx * push
+                b.y += ny * push
+
+                // 2) 서로 다가오는 중일 때만 법선 방향 속도를 맞바꾼다.
+                let approaching = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny
+                guard approaching < 0 else { continue }
+                a.vx += approaching * nx
+                a.vy += approaching * ny
+                b.vx -= approaching * nx
+                b.vy -= approaching * ny
+                for shrimp in [a, b] where abs(shrimp.vx) < Self.minSpeed {
+                    shrimp.vx = shrimp.vx < 0 ? -Self.minSpeed : Self.minSpeed
+                }
+            }
+        }
     }
 
     private func move(_ shrimp: Shrimp, dt: CGFloat) {

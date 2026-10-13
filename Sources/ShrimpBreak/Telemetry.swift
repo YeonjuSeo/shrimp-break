@@ -234,6 +234,7 @@ final class Telemetry {
             ("sitting_minutes", "\(previous.sitting)", "\(current.sitting)"),
             ("standing_minutes", "\(previous.standing)", "\(current.standing)"),
             ("away_threshold", "\(previous.away)", "\(current.away)"),
+            ("escalation_seconds", "\(previous.escalation)", "\(current.escalation)"),
         ].filter { $0.1 != $0.2 }
         for (field, from, to) in changes {
             enqueue(baseEvent(type: "settings").merging([
@@ -369,7 +370,7 @@ final class Telemetry {
     private func currentSettings() -> SettingsSnapshot {
         SettingsSnapshot(separate: Settings.usesSeparatePostureTimers, interval: Settings.intervalMinutes,
                          sitting: Settings.sittingMinutes, standing: Settings.standingMinutes,
-                         away: Settings.awayThresholdMinutes)
+                         away: Settings.awayThresholdMinutes, escalation: Settings.escalationSeconds)
     }
 
     private func settingsFields(_ settings: SettingsSnapshot) -> Event {
@@ -379,6 +380,7 @@ final class Telemetry {
             "sitting_minutes": .number(Double(settings.sitting)),
             "standing_minutes": .number(Double(settings.standing)),
             "away_threshold": .number(Double(settings.away)),
+            "escalation_seconds": .number(Double(settings.escalation)),
         ]
     }
 
@@ -515,6 +517,7 @@ private struct SettingsSnapshot: Codable, Equatable {
     let sitting: Int
     let standing: Int
     let away: Int
+    let escalation: Int
 }
 
 /// 하루 동안 모은 숫자. 날짜가 바뀌면 전송하고 새로 시작한다.

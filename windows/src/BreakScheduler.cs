@@ -22,10 +22,8 @@ namespace ShrimpBreak
         /// <summary>상태가 바뀌었을 때 (트레이 아이콘 갱신용).</summary>
         public event Action Changed;
 
-        static readonly TimeSpan EscalationInterval = TimeSpan.FromMinutes(1);
-
         readonly Timer deadlineTimer = new Timer();
-        readonly Timer escalationTimer = new Timer { Interval = (int)EscalationInterval.TotalMilliseconds };
+        readonly Timer escalationTimer = new Timer();
         DateTime? deadline;
         /// <summary>일시정지 시점에 남아 있던 시간. null 이면 재개 시 간격 전체로 새로 시작.</summary>
         TimeSpan? pausedRemaining;
@@ -104,6 +102,14 @@ namespace ShrimpBreak
             if (target == Posture.Sitting) Settings.SittingMinutes = minutes;
             else Settings.StandingMinutes = minutes;
         });
+
+        /// <summary>새우 증식 간격(초). 새우가 나와 있는 중이면 지금부터 새 간격으로 늘린다.</summary>
+        public void SetEscalationSeconds(int seconds)
+        {
+            Settings.EscalationSeconds = seconds;
+            if (IsAlerting) StartEscalation();
+            Changed?.Invoke();
+        }
 
         /// <summary>
         /// 타이머 한 개 ↔ 두 개 전환.
@@ -237,9 +243,16 @@ namespace ShrimpBreak
             Posture = Posture == Posture.Sitting ? Posture.Standing : Posture.Sitting;
             Spawn?.Invoke();
 
-            escalationTimer.Stop();
-            escalationTimer.Start();
+            StartEscalation();
             Changed?.Invoke();
+        }
+
+        /// <summary>클릭할 때까지 설정한 간격(3~60초)마다 한 마리씩 늘린다.</summary>
+        void StartEscalation()
+        {
+            escalationTimer.Stop();
+            escalationTimer.Interval = Settings.EscalationSeconds * 1000;
+            escalationTimer.Start();
         }
 
         void StopAll()

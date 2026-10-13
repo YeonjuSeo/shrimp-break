@@ -41,7 +41,6 @@ final class BreakScheduler {
     private var deadlineTimer: Timer?
     private var escalationTimer: Timer?
 
-    private static let escalationInterval: TimeInterval = 60
 
     var phase: Phase {
         if isUserPaused { return .paused }
@@ -98,6 +97,13 @@ final class BreakScheduler {
             case .standing: Settings.standingMinutes = minutes
             }
         }
+    }
+
+    /// 새우 증식 간격(초). 새우가 나와 있는 중이면 지금부터 새 간격으로 늘린다.
+    func setEscalationSeconds(_ seconds: Int) {
+        Settings.escalationSeconds = seconds
+        if isAlerting { startEscalation() }
+        onChange()
     }
 
     /// 타이머 한 개 ↔ 두 개 전환.
@@ -204,18 +210,23 @@ final class BreakScheduler {
         isAlerting = true
         posture = posture.toggled
         onSpawn()
+        startEscalation()
+        onChange()
+    }
 
+    /// 클릭할 때까지 설정한 간격(3~60초)마다 한 마리씩 늘린다.
+    private func startEscalation() {
         escalationTimer?.invalidate()
-        let timer = Timer(timeInterval: Self.escalationInterval, repeats: true) { [weak self] _ in
+        let interval = TimeInterval(Settings.escalationSeconds)
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, !self.isAwayWhileStanding else { return } // 자리에 없을 땐 쌓지 않는다
                 self.onSpawn()
             }
         }
-        timer.tolerance = 1
+        timer.tolerance = min(1, interval * 0.1)
         RunLoop.main.add(timer, forMode: .common)
         escalationTimer = timer
-        onChange()
     }
 
     private func stopAll() {

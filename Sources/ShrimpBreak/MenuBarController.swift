@@ -117,6 +117,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         durationItems = makeDurationItems()
         durationSignature = Self.currentDurationSignature()
         durationItems.forEach(menu.addItem)
+
+        // 슬라이더 행: 끄는 동안 숫자가 바뀌고, 손을 뗄 때 적용된다 (메뉴는 닫히지 않음).
+        let escalation = NSMenuItem()
+        let sliderView = SliderMenuItemView(value: Settings.escalationSeconds, range: Settings.escalationRange) {
+            "새우 증식 속도: \(Self.escalationText($0)) 한 마리"
+        }
+        sliderView.onCommit = { [weak self] seconds in self?.scheduler.setEscalationSeconds(seconds) }
+        escalation.view = sliderView
+        menu.addItem(escalation)
         menu.addItem(.separator())
 
         menu.addItem(awayMenuItem())
@@ -372,6 +381,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return posture == .sitting ? "앉기 타이머 바로 시작 (\(minutes))" : "서기 타이머 바로 시작 (\(minutes))"
     }
 
+    private static func escalationText(_ seconds: Int) -> String {
+        seconds >= 60 ? "1분마다" : "\(seconds)초마다"
+    }
+
     private static func minutesLeft(until deadline: Date) -> Int {
         max(1, Int((deadline.timeIntervalSinceNow / 60).rounded(.up)))
     }
@@ -426,5 +439,70 @@ private final class SwitchMenuItemView: NSView {
 
     @objc private func handleSwitch() {
         onChange(toggle.state == .on)
+    }
+}
+
+/// 메뉴 안에 넣는 "글자 + 슬라이더" 행. 끄는 동안 글자의 숫자가 바뀌고, 마우스를 뗄 때 onCommit 이 한 번 불린다
+/// (끄는 내내 설정을 저장·통계 기록하지 않도록).
+private final class SliderMenuItemView: NSView {
+    var onCommit: (Int) -> Void = { _ in }
+
+    private let label = NSTextField(labelWithString: "")
+    private let slider: NSSlider
+    private let text: (Int) -> String
+    private var committedValue: Int
+
+    init(value: Int, range: ClosedRange<Int>, text: @escaping (Int) -> String) {
+        self.text = text
+        committedValue = value
+        slider = NSSlider(value: Double(value), minValue: Double(range.lowerBound), maxValue: Double(range.upperBound),
+                          target: nil, action: nil)
+        super.init(frame: NSRect(x: 0, y: 0, width: 280, height: 46))
+        autoresizingMask = [.width]
+
+        label.font = .menuFont(ofSize: 0)
+        label.textColor = .labelColor
+        slider.controlSize = .small
+        slider.isContinuous = true
+        slider.target = self
+        slider.action = #selector(handleSlide)
+
+        let minLabel = Self.caption("\(range.lowerBound)초")
+        let maxLabel = Self.caption("1분")
+        for view in [label, slider, minLabel, maxLabel] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            minLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            minLabel.centerYAnchor.constraint(equalTo: slider.centerYAnchor),
+            slider.leadingAnchor.constraint(equalTo: minLabel.trailingAnchor, constant: 6),
+            slider.trailingAnchor.constraint(equalTo: maxLabel.leadingAnchor, constant: -6),
+            slider.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 4),
+            maxLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            maxLabel.centerYAnchor.constraint(equalTo: slider.centerYAnchor),
+        ])
+        label.stringValue = text(value)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    @objc private func handleSlide() {
+        let value = Int(slider.doubleValue.rounded())
+        label.stringValue = text(value)
+        // 끄는 중에는 글자만 바꾸고, 마우스를 뗄 때 한 번만 적용한다.
+        guard NSApp.currentEvent?.type == .leftMouseUp, value != committedValue else { return }
+        committedValue = value
+        onCommit(value)
+    }
+
+    private static func caption(_ text: String) -> NSTextField {
+        let field = NSTextField(labelWithString: text)
+        field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        field.textColor = .secondaryLabelColor
+        return field
     }
 }
