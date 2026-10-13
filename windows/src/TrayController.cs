@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
 
@@ -95,6 +96,9 @@ namespace ShrimpBreak
 
         void BuildMenu()
         {
+            // 이전 항목을 정리(Dispose)하고 다시 만든다. 목록에서 빼기만 하면 슬라이더·하위 메뉴가 가진
+            // Windows 창 핸들이 남아서, 메뉴를 열 때마다 조금씩 쌓인다.
+            foreach (var item in menu.Items.Cast<ToolStripItem>().ToList()) item.Dispose();
             menu.Items.Clear();
 
             statusItem = new ToolStripMenuItem(StatusText()) { Enabled = false };

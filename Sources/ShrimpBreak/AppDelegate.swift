@@ -14,16 +14,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             telemetry.recordShrimpCount(overlay.count)
         }
         scheduler.onClear = { [overlay] in overlay.clearAll() }
-        overlay.onShrimpClicked = { [overlay, scheduler, telemetry] clickedTempura in
-            telemetry.recordAcknowledge(shrimpCount: overlay.count, clickedTempura: clickedTempura)
+        // overlay·scheduler 가 자기 자신을 붙잡는 순환 참조가 되지 않도록 weak 로 잡는다.
+        overlay.onShrimpClicked = { [weak overlay, scheduler, telemetry] clickedTempura in
+            telemetry.recordAcknowledge(shrimpCount: overlay?.count ?? 0, clickedTempura: clickedTempura)
             scheduler.acknowledge()
         }
         presence.onAwayChanged = { [scheduler] away in scheduler.setAway(away) }
 
         let menuBar = MenuBarController(scheduler: scheduler, presence: presence, overlay: overlay, telemetry: telemetry)
-        scheduler.onChange = { [weak menuBar, scheduler, telemetry] in
+        scheduler.onChange = { [weak menuBar, weak scheduler, telemetry] in
             menuBar?.refresh()
-            telemetry.observe(scheduler)
+            if let scheduler { telemetry.observe(scheduler) }
         }
         self.menuBar = menuBar
 
