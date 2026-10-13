@@ -32,6 +32,11 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/ShrimpBreak"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
+# 익명 통계를 받을 구글 시트(Apps Script 웹 앱) 주소. 파일이 없으면 통계 기능 전체가 꺼진 빌드가 된다.
+if [ -s "$ROOT/telemetry/endpoint.txt" ]; then
+  /usr/libexec/PlistBuddy -c "Add :ShrimpTelemetryURL string $(tr -d '[:space:]' < "$ROOT/telemetry/endpoint.txt")" "$APP/Contents/Info.plist"
+  echo "▶ 익명 통계 주소 포함"
+fi
 cp "$ROOT/Resources/shrimp.png" "$ROOT/Resources/tempura.png" \
    "$ROOT"/Resources/MenuBarSitting*.png "$ROOT"/Resources/MenuBarStanding*.png "$APP/Contents/Resources/"
 

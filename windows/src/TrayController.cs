@@ -16,6 +16,7 @@ namespace ShrimpBreak
         readonly BreakScheduler scheduler;
         readonly PresenceMonitor presence;
         readonly ShrimpOverlay overlay;
+        readonly Telemetry telemetry;
         readonly TrayIcons icons = new TrayIcons();
         readonly NotifyIcon notifyIcon = new NotifyIcon();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
@@ -32,11 +33,12 @@ namespace ShrimpBreak
         /// <summary>시간 항목을 만들 때의 설정값. 바뀌었을 때만 다시 만든다 (열려 있는 하위 메뉴가 닫히지 않도록).</summary>
         string durationSignature = "";
 
-        public TrayController(BreakScheduler scheduler, PresenceMonitor presence, ShrimpOverlay overlay)
+        public TrayController(BreakScheduler scheduler, PresenceMonitor presence, ShrimpOverlay overlay, Telemetry telemetry)
         {
             this.scheduler = scheduler;
             this.presence = presence;
             this.overlay = overlay;
+            this.telemetry = telemetry;
 
             // 항목이 비어 있으면 WinForms 가 열기를 취소해 두므로, 채운 뒤 취소를 풀어 준다.
             menu.Opening += (_, e) =>
@@ -99,9 +101,21 @@ namespace ShrimpBreak
             menu.Items.Add(statusItem);
             menu.Items.Add(new ToolStripSeparator());
 
-            menu.Items.Add(Item("타이머 초기화 (지금 차례 처음부터)", () => scheduler.StartTurn(null)));
-            startSittingItem = Item(StartText(Posture.Sitting), () => scheduler.StartTurn(Posture.Sitting));
-            startStandingItem = Item(StartText(Posture.Standing), () => scheduler.StartTurn(Posture.Standing));
+            menu.Items.Add(Item("타이머 초기화 (지금 차례 처음부터)", () =>
+            {
+                telemetry.RecordQuickAction(Telemetry.QuickAction.Restart);
+                scheduler.StartTurn(null);
+            }));
+            startSittingItem = Item(StartText(Posture.Sitting), () =>
+            {
+                telemetry.RecordQuickAction(Telemetry.QuickAction.Sit);
+                scheduler.StartTurn(Posture.Sitting);
+            });
+            startStandingItem = Item(StartText(Posture.Standing), () =>
+            {
+                telemetry.RecordQuickAction(Telemetry.QuickAction.Stand);
+                scheduler.StartTurn(Posture.Standing);
+            });
             menu.Items.Add(startSittingItem);
             menu.Items.Add(startStandingItem);
             menu.Items.Add(new ToolStripSeparator());
@@ -130,9 +144,12 @@ namespace ShrimpBreak
 
             menu.Items.Add(AwayMenu());
             menu.Items.Add(Item("Windows 시작 시 자동 실행", HandleToggleLaunchAtLogin, Settings.LaunchAtLogin));
+            if (telemetry.IsAvailable)
+                menu.Items.Add(Item("익명 사용 통계 보내기", () => telemetry.SetEnabled(!telemetry.IsEnabled), telemetry.IsEnabled));
             menu.Items.Add(new ToolStripSeparator());
 
-            menu.Items.Add(Item("종료", Application.Exit));
+            // 종료 전에 오늘 통계를 보낼 시간을 잠깐(최대 2초) 준다.
+            menu.Items.Add(Item("종료", () => telemetry.FlushBeforeQuit(Application.Exit)));
         }
 
         ToolStripItem[] MakeDurationItems() => Settings.UsesSeparatePostureTimers
@@ -241,6 +258,7 @@ namespace ShrimpBreak
         {
             Settings.AwayThresholdMinutes = minutes;
             presence.SettingsChanged();
+            telemetry.RecordSettingsIfChanged();
             Refresh();
         }
 

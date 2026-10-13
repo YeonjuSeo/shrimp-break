@@ -41,7 +41,8 @@ namespace ShrimpBreak
         int fadeFrame;
         bool isHighResolutionTimer;
 
-        public event Action ShrimpClicked;
+        /// <summary>새우를 클릭했을 때. 인자는 클릭한 것이 새우튀김인지.</summary>
+        public event Action<bool> ShrimpClicked;
 
         public ShrimpOverlay()
         {
@@ -62,8 +63,8 @@ namespace ShrimpBreak
             var cursorScreen = Screen.FromPoint(Cursor.Position).DeviceName;
             var home = stages.FirstOrDefault(s => s.Id == cursorScreen) ?? stages[0];
             var window = new ShrimpWindow();
-            window.Clicked += HandleShrimpClicked;
             var sprite = new Sprite(ShrimpPhysics.Spawn(home, random), random.NextDouble() < TempuraChance, window);
+            window.Clicked += () => HandleShrimpClicked(sprite);
             shrimps.Add(sprite);
 
             Render(sprite, force: true); // 그림을 먼저 올린 뒤 보여줘야 깜빡임이 없다.
@@ -162,7 +163,6 @@ namespace ShrimpBreak
             StopAnimating();
             foreach (var sprite in shrimps)
             {
-                sprite.Window.Clicked -= HandleShrimpClicked;
                 sprite.Window.Close();
                 sprite.Window.Dispose();
             }
@@ -171,9 +171,9 @@ namespace ShrimpBreak
             isClearing = false;
         }
 
-        void HandleShrimpClicked()
+        void HandleShrimpClicked(Sprite sprite)
         {
-            if (!isClearing) ShrimpClicked?.Invoke();
+            if (!isClearing) ShrimpClicked?.Invoke(sprite.IsTempura);
         }
 
         /// <summary>모니터 연결/해제·배치·배율 변경 시 무대를 다시 만들고, 떠 있던 새우 수만큼 다시 내보낸다.</summary>

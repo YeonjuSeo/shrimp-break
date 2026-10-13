@@ -28,6 +28,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let scheduler: BreakScheduler
     private let presence: PresenceMonitor
     private let overlay: ShrimpOverlay
+    private let telemetry: Telemetry
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     /// 메뉴바의 "남은 분" 표시용. 카운트다운 중에만 1분에 한 번 깨어난다.
     private var titleTimer: Timer?
@@ -44,10 +45,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// 시간 항목을 만들 때의 설정값. 바뀌었을 때만 다시 만든다 (열려 있는 하위 메뉴가 닫히지 않도록).
     private var durationSignature = ""
 
-    init(scheduler: BreakScheduler, presence: PresenceMonitor, overlay: ShrimpOverlay) {
+    init(scheduler: BreakScheduler, presence: PresenceMonitor, overlay: ShrimpOverlay, telemetry: Telemetry) {
         self.scheduler = scheduler
         self.presence = presence
         self.overlay = overlay
+        self.telemetry = telemetry
         super.init()
 
         statusItem.button?.imagePosition = .imageLeading
@@ -122,6 +124,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let login = item("로그인 시 자동 실행", #selector(handleToggleLaunchAtLogin))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
+        if telemetry.isAvailable {
+            let stats = item("익명 사용 통계 보내기", #selector(handleToggleTelemetry))
+            stats.state = telemetry.isEnabled ? .on : .off
+            menu.addItem(stats)
+        }
         menu.addItem(.separator())
 
         menu.addItem(item("종료", #selector(handleQuit), key: "q"))
@@ -222,15 +229,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func handleRestartTurn() {
+        telemetry.recordQuickAction(.restart)
         scheduler.startTurn(nil)
     }
 
     @objc private func handleStartSitting() {
+        telemetry.recordQuickAction(.sit)
         scheduler.startTurn(.sitting)
     }
 
     @objc private func handleStartStanding() {
+        telemetry.recordQuickAction(.stand)
         scheduler.startTurn(.standing)
+    }
+
+    @objc private func handleToggleTelemetry() {
+        telemetry.setEnabled(!telemetry.isEnabled)
     }
 
     @objc private func handleSelectDuration(_ sender: NSMenuItem) {
@@ -279,6 +293,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func handleSelectAway(_ sender: NSMenuItem) {
         Settings.awayThresholdMinutes = sender.tag
         presence.settingsChanged()
+        telemetry.recordSettingsIfChanged()
         refresh()
     }
 

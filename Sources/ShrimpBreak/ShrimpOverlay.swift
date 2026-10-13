@@ -18,7 +18,8 @@ import QuartzCore
 /// - 오버레이는 평소 클릭을 통과시키고(ignoresMouseEvents), 커서가 새우 위에 있을 때만 클릭을 받는다.
 @MainActor
 final class ShrimpOverlay: NSObject {
-    var onShrimpClicked: () -> Void = {}
+    /// 새우를 클릭했을 때. 인자는 클릭한 것이 새우튀김인지.
+    var onShrimpClicked: (_ clickedTempura: Bool) -> Void = { _ in }
 
     private var stages: [ScreenStage] = []
     private var shrimps: [Shrimp] = []
@@ -63,6 +64,7 @@ final class ShrimpOverlay: NSObject {
         let peak = CGFloat.random(in: 140...360)
         let shrimp = Shrimp(
             image: isTempura ? images.tempura : images.shrimp,
+            isTempura: isTempura,
             size: size,
             home: home,
             x: CGFloat.random(in: home.frame.minX...max(home.frame.minX + 1, home.frame.maxX - size)),
@@ -282,7 +284,7 @@ final class ShrimpOverlay: NSObject {
     /// 아래 앱으로 갈 수 있다. 그 경우는 전역 클릭 감지(globalClickMonitor)가 새우 위치를 보고 잡아낸다.
     private func updateMousePassThrough() {
         let mouse = NSEvent.mouseLocation
-        let isHovering = shrimpHit(atGlobal: mouse)
+        let isHovering = shrimpHit(atGlobal: mouse) != nil
         for stage in stages {
             stage.setAcceptsMouse(isHovering && NSMouseInRect(mouse, stage.frame, false))
         }
@@ -292,16 +294,16 @@ final class ShrimpOverlay: NSObject {
         }
     }
 
-    private func shrimpHit(atGlobal point: CGPoint) -> Bool {
-        shrimps.contains { shrimp in
+    private func shrimpHit(atGlobal point: CGPoint) -> Shrimp? {
+        shrimps.last { shrimp in
             shrimp.rect.insetBy(dx: shrimp.size * 0.12, dy: shrimp.size * 0.12).contains(point)
         }
     }
 
     private func handleMouseDown(atGlobal point: CGPoint) {
-        guard !isClearing, shrimpHit(atGlobal: point) else { return }
+        guard !isClearing, let shrimp = shrimpHit(atGlobal: point) else { return }
         NSCursor.arrow.set()
-        onShrimpClicked()
+        onShrimpClicked(shrimp.isTempura)
     }
 }
 
@@ -310,6 +312,7 @@ final class ShrimpOverlay: NSObject {
 @MainActor
 private final class Shrimp {
     let image: CGImage
+    let isTempura: Bool
     let size: CGFloat
     /// 지금 바닥으로 삼는 모니터.
     var home: ScreenStage
@@ -322,9 +325,10 @@ private final class Shrimp {
     /// 몸이 걸쳐 있는 모니터별 레이어.
     var layers: [CGDirectDisplayID: CALayer] = [:]
 
-    init(image: CGImage, size: CGFloat, home: ScreenStage,
+    init(image: CGImage, isTempura: Bool, size: CGFloat, home: ScreenStage,
          x: CGFloat, y: CGFloat, vx: CGFloat, vy: CGFloat, bounceVelocity: CGFloat) {
         self.image = image
+        self.isTempura = isTempura
         self.size = size
         self.home = home
         self.x = x

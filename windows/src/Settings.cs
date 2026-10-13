@@ -55,6 +55,20 @@ namespace ShrimpBreak
             set => Write("AwayThresholdMinutes", value);
         }
 
+        /// <summary>익명 통계 동의 여부: "granted" / "denied" / null(아직 안 물어봄).</summary>
+        public static string TelemetryConsent
+        {
+            get => ReadString("TelemetryConsent");
+            set => WriteString("TelemetryConsent", value);
+        }
+
+        /// <summary>익명 통계용 무작위 id. 동의할 때 만들고, 끄면 지운다.</summary>
+        public static string TelemetryId
+        {
+            get => ReadString("TelemetryId");
+            set => WriteString("TelemetryId", value);
+        }
+
         /// <summary>Windows 로그인 시 자동 실행 (HKCU Run 키).</summary>
         public static bool LaunchAtLogin
         {
@@ -83,6 +97,21 @@ namespace ShrimpBreak
         {
             using (var key = Registry.CurrentUser.OpenSubKey(KeyPath))
                 return key?.GetValue(name) is int value ? value : fallback;
+        }
+
+        static string ReadString(string name)
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(KeyPath))
+                return key?.GetValue(name) as string;
+        }
+
+        static void WriteString(string name, string value)
+        {
+            using (var key = Registry.CurrentUser.CreateSubKey(KeyPath))
+            {
+                if (value == null) key.DeleteValue(name, false);
+                else key.SetValue(name, value, RegistryValueKind.String);
+            }
         }
 
         static void Write(string name, int value)

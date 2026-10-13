@@ -40,6 +40,7 @@ namespace ShrimpBreak
                 Directory.CreateDirectory(folder);
                 var path = Path.Combine(folder, "error.log");
                 File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {error}\r\n\r\n");
+                Telemetry.RecordError();
                 MessageBox.Show($"새우 브레이크에 문제가 생겼어요.\n오류 내용을 아래 파일에 저장했어요:\n{path}",
                                 "새우 브레이크", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -56,20 +57,31 @@ namespace ShrimpBreak
         readonly BreakScheduler scheduler = new BreakScheduler();
         readonly PresenceMonitor presence = new PresenceMonitor();
         readonly ShrimpOverlay overlay = new ShrimpOverlay();
+        readonly Telemetry telemetry = new Telemetry();
         readonly TrayController tray;
 
         public ShrimpBreakApp()
         {
-            scheduler.Spawn += overlay.Spawn;
+            scheduler.Spawn += () =>
+            {
+                overlay.Spawn();
+                telemetry.RecordShrimpCount(overlay.Count);
+            };
             scheduler.Clear += overlay.ClearAll;
-            overlay.ShrimpClicked += scheduler.Acknowledge;
+            overlay.ShrimpClicked += clickedTempura =>
+            {
+                telemetry.RecordAcknowledge(overlay.Count, clickedTempura);
+                scheduler.Acknowledge();
+            };
             presence.AwayChanged += scheduler.SetAway;
 
-            tray = new TrayController(scheduler, presence, overlay);
+            tray = new TrayController(scheduler, presence, overlay, telemetry);
             scheduler.Changed += tray.Refresh;
+            scheduler.Changed += () => telemetry.Observe(scheduler);
 
             presence.Start();
             scheduler.Start();
+            telemetry.Start();
         }
 
         protected override void Dispose(bool disposing)
