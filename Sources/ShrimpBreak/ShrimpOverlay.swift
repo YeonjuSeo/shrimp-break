@@ -63,7 +63,7 @@ final class ShrimpOverlay: NSObject {
               let home = stageUnderMouse() ?? stages.first else { return }
 
         let size = Self.shrimpSizeMillimeters * home.pointsPerMillimeter
-        let isTempura = Double.random(in: 0..<1) < 0.15
+        let isTempura = Double.random(in: 0..<1) < 0.20
         // 높이 제각각으로 통통. 바닥 아래(-size)에서 솟아오른다.
         let peak = CGFloat.random(in: 140...360)
         let shrimp = Shrimp(
