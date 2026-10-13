@@ -52,3 +52,17 @@ xattr -dr com.apple.quarantine /Applications/ShrimpBreak.app
 ```bash
 DEV_ID="Developer ID Application: 이름 (TEAMID)" scripts/release.sh   # → dist/ShrimpBreak.dmg
 ```
+
+## Windows 버전
+
+`windows/` — C# (.NET Framework 4.8, Windows 10/11 기본 탑재 → 설치 불필요). Mac 에서 빌드한다 (.NET SDK 필요, `~/.dotnet`).
+
+```bash
+scripts/build_windows.sh               # → dist/ShrimpBreak-Windows.zip (공유용)
+DEV_TOOLS=1 scripts/build_windows.sh   # 테스트 메뉴 포함
+```
+
+- 빌드 전에 새우 이동 규칙 시뮬레이션 테스트(`windows/tests`)가 먼저 돈다 — 여러 모니터 넘나들기·벽·바닥.
+- Mac 과 다른 점: 메뉴바 대신 작업 표시줄 알림 영역(트레이) 아이콘, 남은 시간은 아이콘 툴팁으로 표시.
+- 받는 사람: zip 풀기 → `ShrimpBreak.exe` 실행 → "Windows의 PC 보호" 창에서 [추가 정보] → [실행].
+- 오류 기록: `%LOCALAPPDATA%\ShrimpBreak\error.log`

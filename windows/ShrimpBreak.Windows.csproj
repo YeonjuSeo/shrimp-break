@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows 10/11 에 기본 탑재된 .NET Framework 4.8 을 쓴다 → 받는 사람은 런타임 설치 없이 exe 하나로 실행.
+    Mac 에서도 빌드된다 (참조 어셈블리 패키지가 자동으로 붙음).
+    빌드: ../scripts/build_windows.sh   (DEV_TOOLS=1 이면 "지금 새우 부르기" 테스트 메뉴 포함)
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>ShrimpBreak</AssemblyName>
+    <RootNamespace>ShrimpBreak</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>AppIcon.ico</ApplicationIcon>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <Version>0.1.0</Version>
+    <Product>ShrimpBreak</Product>
+    <AssemblyTitle>새우 브레이크</AssemblyTitle>
+    <Description>정해진 시간마다 새우가 튀어나와 자세를 바꾸라고 알려주는 앱</Description>
+    <Copyright />
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- 테스트 프로젝트 폴더(tests/)의 빌드 산출물이 섞이지 않도록 -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests/**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(DevTools)' == 'true'">
+    <DefineConstants>$(DefineConstants);SHRIMP_DEV_TOOLS</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="src/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+  <!-- 이미지는 Mac 버전과 같은 원본을 exe 안에 넣는다. -->
+  <ItemGroup>
+    <EmbeddedResource Include="../Resources/shrimp.png" LogicalName="shrimp.png" />
+    <EmbeddedResource Include="../Resources/tempura.png" LogicalName="tempura.png" />
+    <EmbeddedResource Include="../assets-src/menubar-sitting-original.png" LogicalName="sitting.png" />
+    <EmbeddedResource Include="../assets-src/menubar-standing-original.png" LogicalName="standing.png" />
+  </ItemGroup>
+
+</Project>

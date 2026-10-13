@@ -2,3 +2,7 @@
 ShrimpBreak.app/
 .DS_Store
 dist/
+windows/bin/
+windows/obj/
+windows/tests/bin/
+windows/tests/obj/

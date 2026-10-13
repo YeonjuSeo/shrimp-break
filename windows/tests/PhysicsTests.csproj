@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 새우 이동 규칙만 떼어 Mac/Linux 에서도 돌리는 시뮬레이션 테스트. 실행: dotnet run (windows/tests 폴더에서) -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../src/ShrimpPhysics.cs" Link="ShrimpPhysics.cs" />
+  </ItemGroup>
+
+</Project>
