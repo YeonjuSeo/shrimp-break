@@ -23,6 +23,15 @@ namespace ShrimpBreak
         readonly Timer tooltipTimer = new Timer { Interval = 60_000 };
         System.Drawing.Icon shownIcon;
 
+        // 메뉴가 열려 있는 동안 그 자리에서 바꿔 줄 항목들.
+        ToolStripMenuItem statusItem;
+        ToolStripMenuItem startSittingItem;
+        ToolStripMenuItem startStandingItem;
+        ToolStripMenuItem separateToggleItem;
+        ToolStripItem[] durationItems = new ToolStripItem[0];
+        /// <summary>시간 항목을 만들 때의 설정값. 바뀌었을 때만 다시 만든다 (열려 있는 하위 메뉴가 닫히지 않도록).</summary>
+        string durationSignature = "";
+
         public TrayController(BreakScheduler scheduler, PresenceMonitor presence, ShrimpOverlay overlay)
         {
             this.scheduler = scheduler;
@@ -34,6 +43,12 @@ namespace ShrimpBreak
             {
                 BuildMenu();
                 e.Cancel = false;
+            };
+            // "따로 설정" 토글은 눌러도 메뉴를 닫지 않는다 → 아래 시간 항목이 그 자리에서 바뀐다.
+            menu.Closing += (_, e) =>
+            {
+                if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && separateToggleItem?.Selected == true)
+                    e.Cancel = true;
             };
             BuildMenu();
             notifyIcon.ContextMenuStrip = menu;
@@ -59,6 +74,8 @@ namespace ShrimpBreak
 
             if (scheduler.Phase == Phase.Counting) tooltipTimer.Start();
             else tooltipTimer.Stop();
+
+            UpdateOpenMenu();
         }
 
         public void Dispose()
@@ -78,7 +95,15 @@ namespace ShrimpBreak
         {
             menu.Items.Clear();
 
-            menu.Items.Add(new ToolStripMenuItem(StatusText()) { Enabled = false });
+            statusItem = new ToolStripMenuItem(StatusText()) { Enabled = false };
+            menu.Items.Add(statusItem);
+            menu.Items.Add(new ToolStripSeparator());
+
+            menu.Items.Add(Item("타이머 초기화 (지금 차례 처음부터)", () => scheduler.StartTurn(null)));
+            startSittingItem = Item(StartText(Posture.Sitting), () => scheduler.StartTurn(Posture.Sitting));
+            startStandingItem = Item(StartText(Posture.Standing), () => scheduler.StartTurn(Posture.Standing));
+            menu.Items.Add(startSittingItem);
+            menu.Items.Add(startStandingItem);
             menu.Items.Add(new ToolStripSeparator());
 
             menu.Items.Add(Item("일시정지", () => scheduler.SetPaused(!scheduler.IsUserPaused), scheduler.IsUserPaused));
@@ -94,18 +119,13 @@ namespace ShrimpBreak
 #endif
             menu.Items.Add(new ToolStripSeparator());
 
-            menu.Items.Add(Item("앉기·서기 시간 따로 설정",
-                                () => scheduler.SetSeparatePostureTimers(!Settings.UsesSeparatePostureTimers),
-                                Settings.UsesSeparatePostureTimers));
-            if (Settings.UsesSeparatePostureTimers)
-            {
-                menu.Items.Add(DurationMenu(TimerTarget.Sitting));
-                menu.Items.Add(DurationMenu(TimerTarget.Standing));
-            }
-            else
-            {
-                menu.Items.Add(DurationMenu(TimerTarget.Single));
-            }
+            separateToggleItem = Item("앉기·서기 시간 따로 설정",
+                                      () => scheduler.SetSeparatePostureTimers(!Settings.UsesSeparatePostureTimers));
+            ApplyToggleState(separateToggleItem, Settings.UsesSeparatePostureTimers);
+            menu.Items.Add(separateToggleItem);
+            durationItems = MakeDurationItems();
+            durationSignature = CurrentDurationSignature();
+            menu.Items.AddRange(durationItems);
             menu.Items.Add(new ToolStripSeparator());
 
             menu.Items.Add(AwayMenu());
@@ -113,6 +133,44 @@ namespace ShrimpBreak
             menu.Items.Add(new ToolStripSeparator());
 
             menu.Items.Add(Item("종료", Application.Exit));
+        }
+
+        ToolStripItem[] MakeDurationItems() => Settings.UsesSeparatePostureTimers
+            ? new ToolStripItem[] { DurationMenu(TimerTarget.Sitting), DurationMenu(TimerTarget.Standing) }
+            : new ToolStripItem[] { DurationMenu(TimerTarget.Single) };
+
+        static string CurrentDurationSignature() =>
+            $"{Settings.UsesSeparatePostureTimers}/{Settings.IntervalMinutes}/{Settings.SittingMinutes}/{Settings.StandingMinutes}";
+
+        /// <summary>토글처럼 보이도록 체크 표시 + 오른쪽에 켜짐/꺼짐.</summary>
+        static void ApplyToggleState(ToolStripMenuItem item, bool isOn)
+        {
+            item.Checked = isOn;
+            item.ShortcutKeyDisplayString = isOn ? "켜짐" : "꺼짐";
+            item.ShowShortcutKeys = true;
+        }
+
+        /// <summary>메뉴가 열린 채로 상태·설정이 바뀌었을 때 해당 항목만 그 자리에서 갱신한다.</summary>
+        void UpdateOpenMenu()
+        {
+            if (!menu.Visible || separateToggleItem == null) return;
+            statusItem.Text = StatusText();
+            startSittingItem.Text = StartText(Posture.Sitting);
+            startStandingItem.Text = StartText(Posture.Standing);
+            ApplyToggleState(separateToggleItem, Settings.UsesSeparatePostureTimers);
+
+            if (durationSignature == CurrentDurationSignature()) return;
+            durationSignature = CurrentDurationSignature();
+            menu.SuspendLayout();
+            foreach (var item in durationItems)
+            {
+                menu.Items.Remove(item);
+                item.Dispose();
+            }
+            durationItems = MakeDurationItems();
+            var insertAt = menu.Items.IndexOf(separateToggleItem) + 1;
+            for (var i = 0; i < durationItems.Length; i++) menu.Items.Insert(insertAt + i, durationItems[i]);
+            menu.ResumeLayout();
         }
 
         static ToolStripMenuItem Item(string text, Action onClick, bool isChecked = false)
@@ -244,6 +302,12 @@ namespace ShrimpBreak
                 default: text = "새우 브레이크 — 자리 비움"; break;
             }
             return text.Length <= 63 ? text : text.Substring(0, 63);
+        }
+
+        static string StartText(Posture posture)
+        {
+            var minutes = DurationText(Settings.MinutesFor(posture));
+            return posture == Posture.Sitting ? $"앉기 타이머 바로 시작 ({minutes})" : $"서기 타이머 바로 시작 ({minutes})";
         }
 
         string PostureText() => scheduler.Posture == Posture.Sitting ? "앉아 있는 중" : "서 있는 중";

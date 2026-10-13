@@ -62,6 +62,15 @@ final class BreakScheduler {
         restartCycle()
     }
 
+    /// 메뉴에서 직접 차례를 시작한다. target 이 nil 이면 지금 자세 차례를 처음부터 다시 센다.
+    /// 일시정지 중이었다면 풀고 바로 시작한다. 새우가 나와 있었다면 치운다.
+    func startTurn(_ target: Posture?) {
+        if let target { posture = target }
+        isUserPaused = false
+        pausedRemaining = nil
+        restartCycle()
+    }
+
     #if SHRIMP_DEV_TOOLS
     /// 테스트용: 지금 바로 알림.
     func triggerNow() {

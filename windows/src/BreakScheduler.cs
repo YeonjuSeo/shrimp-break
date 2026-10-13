@@ -64,6 +64,18 @@ namespace ShrimpBreak
         /// <summary>새우를 클릭함 = 자세를 바꿨다. 새우를 치우고 다음 주기를 시작한다.</summary>
         public void Acknowledge() => RestartCycle();
 
+        /// <summary>
+        /// 메뉴에서 직접 차례를 시작한다. target 이 null 이면 지금 자세 차례를 처음부터 다시 센다.
+        /// 일시정지 중이었다면 풀고 바로 시작한다. 새우가 나와 있었다면 치운다.
+        /// </summary>
+        public void StartTurn(Posture? target)
+        {
+            if (target.HasValue) Posture = target.Value;
+            IsUserPaused = false;
+            pausedRemaining = null;
+            RestartCycle();
+        }
+
 #if SHRIMP_DEV_TOOLS
         /// <summary>테스트용: 지금 바로 알림.</summary>
         public void TriggerNow()

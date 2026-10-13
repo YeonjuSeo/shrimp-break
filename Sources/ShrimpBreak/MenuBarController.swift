@@ -34,6 +34,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let sittingIcon = MenuBarController.loadIcon("MenuBarSitting")
     private let standingIcon = MenuBarController.loadIcon("MenuBarStanding")
 
+    // 메뉴가 열려 있는 동안 그 자리에서 바꿔 줄 항목들 (스위치를 눌러도 메뉴가 닫히지 않으므로).
+    private weak var openMenu: NSMenu?
+    private var statusMenuItem: NSMenuItem?
+    private var startSittingItem: NSMenuItem?
+    private var startStandingItem: NSMenuItem?
+    private var separateToggleItem: NSMenuItem?
+    private var durationItems: [NSMenuItem] = []
+    /// 시간 항목을 만들 때의 설정값. 바뀌었을 때만 다시 만든다 (열려 있는 하위 메뉴가 닫히지 않도록).
+    private var durationSignature = ""
+
     init(scheduler: BreakScheduler, presence: PresenceMonitor, overlay: ShrimpOverlay) {
         self.scheduler = scheduler
         self.presence = presence
@@ -52,9 +62,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         statusItem.button?.image = scheduler.posture == .sitting ? sittingIcon : standingIcon
         statusItem.button?.title = title()
         updateTitleTimer()
+        updateOpenMenu()
     }
 
     // MARK: - NSMenuDelegate
+
+    func menuWillOpen(_ menu: NSMenu) {
+        openMenu = menu
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        openMenu = nil
+    }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
@@ -62,6 +81,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let status = NSMenuItem(title: statusText(), action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
+        statusMenuItem = status
+        menu.addItem(.separator())
+
+        menu.addItem(item("타이머 초기화 (지금 차례 처음부터)", #selector(handleRestartTurn), key: "r"))
+        let startSitting = item(startTitle(.sitting), #selector(handleStartSitting))
+        let startStanding = item(startTitle(.standing), #selector(handleStartStanding))
+        menu.addItem(startSitting)
+        menu.addItem(startStanding)
+        startSittingItem = startSitting
+        startStandingItem = startStanding
         menu.addItem(.separator())
 
         let pause = item("일시정지", #selector(handleTogglePause), key: "p")
@@ -76,15 +105,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         #endif
         menu.addItem(.separator())
 
-        let separate = item("앉기·서기 시간 따로 설정", #selector(handleToggleSeparateTimers))
-        separate.state = Settings.usesSeparatePostureTimers ? .on : .off
+        // 스위치 행: 눌러도 메뉴가 닫히지 않고, 아래 시간 항목이 바로 바뀐다.
+        let separate = NSMenuItem()
+        let toggleView = SwitchMenuItemView(title: "앉기·서기 시간 따로 설정", isOn: Settings.usesSeparatePostureTimers)
+        toggleView.onChange = { [weak self] isOn in self?.handleToggleSeparateTimers(isOn) }
+        separate.view = toggleView
         menu.addItem(separate)
-        if Settings.usesSeparatePostureTimers {
-            menu.addItem(durationMenuItem(for: .sitting))
-            menu.addItem(durationMenuItem(for: .standing))
-        } else {
-            menu.addItem(durationMenuItem(for: .single))
-        }
+        separateToggleItem = separate
+        durationItems = makeDurationItems()
+        durationSignature = Self.currentDurationSignature()
+        durationItems.forEach(menu.addItem)
         menu.addItem(.separator())
 
         menu.addItem(awayMenuItem())
@@ -103,6 +133,33 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
         return item
+    }
+
+    private func makeDurationItems() -> [NSMenuItem] {
+        Settings.usesSeparatePostureTimers
+            ? [durationMenuItem(for: .sitting), durationMenuItem(for: .standing)]
+            : [durationMenuItem(for: .single)]
+    }
+
+    /// 메뉴가 열린 채로 상태·설정이 바뀌었을 때 해당 항목만 그 자리에서 갱신한다.
+    private func updateOpenMenu() {
+        guard let menu = openMenu else { return }
+        statusMenuItem?.title = statusText()
+        startSittingItem?.title = startTitle(.sitting)
+        startStandingItem?.title = startTitle(.standing)
+
+        guard let toggle = separateToggleItem, durationSignature != Self.currentDurationSignature() else { return }
+        durationSignature = Self.currentDurationSignature()
+        durationItems.forEach { if $0.menu === menu { menu.removeItem($0) } }
+        let insertAt = menu.index(of: toggle) + 1
+        durationItems = makeDurationItems()
+        for (offset, item) in durationItems.enumerated() {
+            menu.insertItem(item, at: insertAt + offset)
+        }
+    }
+
+    private static func currentDurationSignature() -> String {
+        "\(Settings.usesSeparatePostureTimers)/\(Settings.intervalMinutes)/\(Settings.sittingMinutes)/\(Settings.standingMinutes)"
     }
 
     private func durationMenuItem(for target: TimerTarget) -> NSMenuItem {
@@ -160,8 +217,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
     #endif
 
-    @objc private func handleToggleSeparateTimers() {
-        scheduler.setSeparatePostureTimers(!Settings.usesSeparatePostureTimers)
+    private func handleToggleSeparateTimers(_ isOn: Bool) {
+        scheduler.setSeparatePostureTimers(isOn) // → onChange → refresh → 열린 메뉴 갱신
+    }
+
+    @objc private func handleRestartTurn() {
+        scheduler.startTurn(nil)
+    }
+
+    @objc private func handleStartSitting() {
+        scheduler.startTurn(.sitting)
+    }
+
+    @objc private func handleStartStanding() {
+        scheduler.startTurn(.standing)
     }
 
     @objc private func handleSelectDuration(_ sender: NSMenuItem) {
@@ -283,6 +352,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         titleTimer = timer
     }
 
+    private func startTitle(_ posture: BreakScheduler.Posture) -> String {
+        let minutes = Self.durationText(Settings.minutes(for: posture))
+        return posture == .sitting ? "앉기 타이머 바로 시작 (\(minutes))" : "서기 타이머 바로 시작 (\(minutes))"
+    }
+
     private static func minutesLeft(until deadline: Date) -> Int {
         max(1, Int((deadline.timeIntervalSinceNow / 60).rounded(.up)))
     }
@@ -291,5 +365,51 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if minutes % 60 == 0 { return "\(minutes / 60)시간" }
         if minutes > 60 { return "\(minutes / 60)시간 \(minutes % 60)분" }
         return "\(minutes)분"
+    }
+}
+
+/// 메뉴 안에 넣는 "글자 + 스위치" 행. 일반 메뉴 항목과 달리 눌러도 메뉴가 닫히지 않는다.
+/// 글자 쪽을 눌러도 스위치가 바뀐다.
+private final class SwitchMenuItemView: NSView {
+    var onChange: (Bool) -> Void = { _ in }
+
+    private let label: NSTextField
+    private let toggle = NSSwitch()
+
+    init(title: String, isOn: Bool) {
+        label = NSTextField(labelWithString: title)
+        super.init(frame: NSRect(x: 0, y: 0, width: 280, height: 26))
+        autoresizingMask = [.width]
+
+        label.font = .menuFont(ofSize: 0)
+        label.textColor = .labelColor
+        toggle.controlSize = .small
+        toggle.state = isOn ? .on : .off
+        toggle.target = self
+        toggle.action = #selector(handleSwitch)
+
+        for view in [label, toggle] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            toggle.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 16),
+            toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func mouseUp(with event: NSEvent) {
+        toggle.state = toggle.state == .on ? .off : .on
+        handleSwitch()
+    }
+
+    @objc private func handleSwitch() {
+        onChange(toggle.state == .on)
     }
 }
