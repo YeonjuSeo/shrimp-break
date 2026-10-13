@@ -24,6 +24,8 @@ final class Telemetry {
     private static let maxQueuedEvents = 200
     private static let eventsPerRequest = 20
     private static let dailyUpsertInterval: TimeInterval = 60 * 60
+    /// 종료할 때 마지막 요약을 보내며 기다리는 최대 시간 (Apps Script 응답이 1~3초 걸린다).
+    private static let quitTimeout: TimeInterval = 5
 
     #if SHRIMP_DEV_TOOLS
     private static let buildKind = "dev"
@@ -242,17 +244,18 @@ final class Telemetry {
         saveSettingsSnapshot(current)
     }
 
-    /// 앱 종료 직전: 오늘 요약을 보내고 끝나면(또는 2초 뒤) completion.
+    /// 앱 종료 직전: 오늘 요약을 보내고 끝나면(또는 최대 5초 뒤) completion.
+    /// 다른 전송이 진행 중이면 그게 끝난 뒤 이어서 남은 것까지 보낸다.
     func flushBeforeQuit(_ completion: @escaping @MainActor () -> Void) {
         guard isEnabled else { return completion() }
         closeSegment()
         save()
         enqueueToday()
         quitCompletion = completion
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.quitTimeout) { [weak self] in
             MainActor.assumeIsolated { self?.finishQuit() }
         }
-        flush { [weak self] in self?.finishQuit() }
+        if !isSending { flush { [weak self] in self?.finishQuit() } }
     }
 
     private func finishQuit() {
@@ -405,6 +408,8 @@ final class Telemetry {
                 if !self.queue.isEmpty { return self.flush(completion) }
             }
             completion()
+            // 종료를 기다리는 중이면: 다 보냈거나 실패했을 때 바로 종료
+            if self.queue.isEmpty || !isSent { self.finishQuit() }
         }
     }
 

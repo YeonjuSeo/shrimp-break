@@ -66,3 +66,10 @@ DEV_TOOLS=1 scripts/build_windows.sh   # 테스트 메뉴 포함
 - Mac 과 다른 점: 메뉴바 대신 작업 표시줄 알림 영역(트레이) 아이콘, 남은 시간은 아이콘 툴팁으로 표시.
 - 받는 사람: zip 풀기 → `ShrimpBreak.exe` 실행 → "Windows의 PC 보호" 창에서 [추가 정보] → [실행].
 - 오류 기록: `%LOCALAPPDATA%\ShrimpBreak\error.log`
+
+## 익명 사용 통계
+
+- 처음 실행 때 동의를 묻고(보내기/안 보내기), 메뉴 "익명 사용 통계 보내기"로 언제든 켜고 끈다.
+- 받는 곳: 구글 시트 + Apps Script 웹 앱 — 설정은 `telemetry/SETUP.md`, 코드는 `telemetry/apps-script.gs`.
+- 주소는 `telemetry/endpoint.txt`(git 제외)에 두면 Mac(`make_app.sh`)·Windows(`build_windows.sh`) 빌드에 들어간다. 없으면 통계 기능 전체가 꺼진 빌드.
+- `DEV_TOOLS=1` 빌드가 보낸 기록은 `build=dev` 로 표시돼 대시보드 집계에서 빠진다.

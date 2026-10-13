@@ -29,6 +29,8 @@ namespace ShrimpBreak
         const int MaxQueuedEvents = 200;
         const int EventsPerRequest = 20;
         static readonly TimeSpan DailyUpsertInterval = TimeSpan.FromHours(1);
+        /// <summary>종료할 때 마지막 요약을 보내며 기다리는 최대 시간 (Apps Script 응답이 1~3초 걸린다).</summary>
+        const int QuitTimeoutMilliseconds = 5000;
 
 #if SHRIMP_DEV_TOOLS
         const string BuildKind = "dev";
@@ -265,7 +267,10 @@ namespace ShrimpBreak
             current.Save(SettingsPath);
         }
 
-        /// <summary>종료 직전: 오늘 요약을 보내고 끝나면(또는 2초 뒤) completion.</summary>
+        /// <summary>
+        /// 종료 직전: 오늘 요약을 보내고 끝나면(또는 최대 5초 뒤) completion.
+        /// 다른 전송이 진행 중이면 그게 끝난 뒤 이어서 남은 것까지 보낸다.
+        /// </summary>
         public void FlushBeforeQuit(Action completion)
         {
             if (!IsEnabled)
@@ -277,14 +282,14 @@ namespace ShrimpBreak
             Save();
             EnqueueToday();
             quitCompletion = completion;
-            var timeout = new Timer { Interval = 2000 };
+            var timeout = new Timer { Interval = QuitTimeoutMilliseconds };
             timeout.Tick += (_, __) =>
             {
                 timeout.Dispose();
                 FinishQuit();
             };
             timeout.Start();
-            Flush(FinishQuit);
+            if (!isSending) Flush(FinishQuit);
         }
 
         void FinishQuit()
@@ -448,6 +453,8 @@ namespace ShrimpBreak
                     }
                 }
                 completion();
+                // 종료를 기다리는 중이면: 다 보냈거나 실패했을 때 바로 종료
+                if (queue.Count == 0 || !isSent) FinishQuit();
             });
         }
 
