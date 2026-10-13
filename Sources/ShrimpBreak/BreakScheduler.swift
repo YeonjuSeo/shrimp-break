@@ -30,6 +30,8 @@ final class BreakScheduler {
 
     private(set) var isUserPaused = false
     private(set) var isAway = false
+    /// 서 있는 차례 중에 자리를 비움 (무시하고 타이머는 계속). 이 동안은 새우를 더 늘리지 않는다.
+    private var isAwayWhileStanding = false
     private(set) var isAlerting = false
     private(set) var posture: Posture = .sitting
     private var deadline: Date?
@@ -52,6 +54,10 @@ final class BreakScheduler {
     /// 이번 차례(지금 자세)의 길이.
     private var interval: TimeInterval { TimeInterval(Settings.minutes(for: posture) * 60) }
     private var isActive: Bool { !isUserPaused && !isAway }
+
+    /// 서 있는 차례인지. 알림 중에는 posture 가 이미 다음 자세로 넘어가 있으므로
+    /// "앉으라는 새우가 떠 있는 동안"(posture == .sitting)도 서 있는 차례로 본다.
+    private var isStandingTurn: Bool { isAlerting ? posture == .sitting : posture == .standing }
 
     func start() {
         restartCycle()
@@ -126,7 +132,18 @@ final class BreakScheduler {
 
     /// 화면 잠금·잠자기·장시간 무입력 = 자리를 비웠다(= 이미 일어났다).
     /// 돌아오면 자리에 다시 앉은 것으로 보고 주기를 처음부터 다시 센다.
+    ///
+    /// 단, 서 있는 차례에는 자리를 뜨는 게 정상이므로 무시하고 타이머를 계속 돌린다.
+    /// (그렇지 않으면 서 있는 동안 입력이 없어 자리 비움 → 돌아오는 순간 새우 없이 앉는 차례로 넘어가 버린다.)
     func setAway(_ away: Bool) {
+        if away, !isAway, !isUserPaused, isStandingTurn {
+            isAwayWhileStanding = true
+            return
+        }
+        if !away, isAwayWhileStanding {
+            isAwayWhileStanding = false
+            return
+        }
         guard away != isAway else { return }
         isAway = away
         if !away { posture = .sitting }
@@ -190,7 +207,10 @@ final class BreakScheduler {
 
         escalationTimer?.invalidate()
         let timer = Timer(timeInterval: Self.escalationInterval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.onSpawn() }
+            MainActor.assumeIsolated {
+                guard let self, !self.isAwayWhileStanding else { return } // 자리에 없을 땐 쌓지 않는다
+                self.onSpawn()
+            }
         }
         timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)

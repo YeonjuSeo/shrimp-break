@@ -33,11 +33,22 @@ namespace ShrimpBreak
         public BreakScheduler()
         {
             deadlineTimer.Tick += (_, __) => Fire();
-            escalationTimer.Tick += (_, __) => Spawn?.Invoke();
+            escalationTimer.Tick += (_, __) =>
+            {
+                if (!isAwayWhileStanding) Spawn?.Invoke(); // 자리에 없을 땐 쌓지 않는다
+            };
         }
 
         public bool IsUserPaused { get; private set; }
         public bool IsAway { get; private set; }
+        /// <summary>서 있는 차례 중에 자리를 비움 (무시하고 타이머는 계속). 이 동안은 새우를 더 늘리지 않는다.</summary>
+        bool isAwayWhileStanding;
+
+        /// <summary>
+        /// 서 있는 차례인지. 알림 중에는 Posture 가 이미 다음 자세로 넘어가 있으므로
+        /// "앉으라는 새우가 떠 있는 동안"(Posture == Sitting)도 서 있는 차례로 본다.
+        /// </summary>
+        bool IsStandingTurn => IsAlerting ? Posture == Posture.Sitting : Posture == Posture.Standing;
         public bool IsAlerting { get; private set; }
         /// <summary>이번 차례에 사용자가 취할 자세. 타이머가 울릴 때마다 교대된다 (앉음 → 섬 → 앉음 …).</summary>
         public Posture Posture { get; private set; } = Posture.Sitting;
@@ -137,9 +148,21 @@ namespace ShrimpBreak
         /// <summary>
         /// 화면 잠금·절전·장시간 무입력 = 자리를 비웠다(= 이미 일어났다).
         /// 돌아오면 자리에 다시 앉은 것으로 보고 주기를 처음부터 다시 센다.
+        /// 단, 서 있는 차례에는 자리를 뜨는 게 정상이므로 무시하고 타이머를 계속 돌린다.
+        /// (그렇지 않으면 서 있는 동안 입력이 없어 자리 비움 → 돌아오는 순간 새우 없이 앉는 차례로 넘어가 버린다.)
         /// </summary>
         public void SetAway(bool away)
         {
+            if (away && !IsAway && !IsUserPaused && IsStandingTurn)
+            {
+                isAwayWhileStanding = true;
+                return;
+            }
+            if (!away && isAwayWhileStanding)
+            {
+                isAwayWhileStanding = false;
+                return;
+            }
             if (away == IsAway) return;
             IsAway = away;
             if (!away) Posture = Posture.Sitting;
