@@ -22,7 +22,7 @@ namespace ShrimpBreak
     sealed class ShrimpOverlay : IDisposable
     {
         const int MaxShrimps = 40;
-        const double TempuraChance = 0.25;
+        const double TempuraChance = 0.15;
         /// <summary>기울기 단계 (-2 ~ 2). 단계를 줄일수록 그림 교체가 줄어 가볍다.</summary>
         const int TiltSteps = 2;
         /// <summary>최대 기울기 (Mac 버전 0.18rad ≈ 10.3°).</summary>
