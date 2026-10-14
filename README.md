@@ -7,6 +7,8 @@
 
 Mac(메뉴바)·Windows(작업 표시줄) 둘 다 가능 → **[최신 버전 받기](https://github.com/YeonjuSeo/shrimp-break/releases/latest)**
 
+<img width="400" height="233" alt="화면 기록 2026-10-14 15 53 39" src="https://github.com/user-attachments/assets/e37aae18-ac95-458f-8e99-231f2de7ffd9" />
+
 ## Features
 
 ### 🪑 앉기 → 🧍 서기 → 💃 움직이기
