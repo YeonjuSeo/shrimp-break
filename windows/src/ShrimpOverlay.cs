@@ -109,6 +109,7 @@ namespace ShrimpBreak
                     waveWindows.Add(wave);
                 }
             foreach (var sprite in shrimps) NativeMethods.BringToTop(sprite.Window.Handle);
+            sprites.SetSweeping(true);
             StartAnimating();
         }
 
@@ -239,6 +240,7 @@ namespace ShrimpBreak
             }
             shrimps.Clear();
             sprites.Clear(); // 새우가 없을 때는 비트맵도 들고 있지 않는다.
+            sprites.SetSweeping(false);
             foreach (var wave in waveWindows)
             {
                 wave.Close();
@@ -318,11 +320,15 @@ namespace ShrimpBreak
         /// <summary>
         /// 방향·기울기·크기별 새우 그림 (GDI 비트맵). 새우가 사라지면 비운다.
         /// 큰 새우는 그림 한 장이 수 MB 라서, 모아 둔 그림이 메모리 상한을 넘으면 가장 오래 안 쓴 그림부터 지운다.
+        /// 파도가 지나가는 동안(2~3초)은 기울기 단계가 많아 필요한 그림이 늘어나므로 상한을 잠깐 올리고,
+        /// 끝나면 모두 비우고 평소 상한으로 되돌린다 (고해상도에서 파도 때 다시 그리느라 끊기지 않도록).
         /// (창에 이미 올린 그림은 창이 따로 복사해 갖고 있어서 지워도 화면에는 영향이 없다.)
         /// </summary>
         sealed class SpriteCache : IDisposable
         {
-            const long MaxBytes = 128L * 1024 * 1024;
+            const long NormalMaxBytes = 128L * 1024 * 1024;
+            /// <summary>파도 동안의 상한. 4K 27" 에서 새우 40마리가 파도를 탈 때 필요한 양(약 290MB)이 들어가도록.</summary>
+            const long SweepMaxBytes = 320L * 1024 * 1024;
 
             readonly Image shrimp;
             readonly Image tempura;
@@ -331,6 +337,7 @@ namespace ShrimpBreak
             /// <summary>최근에 쓴 순서 (앞쪽이 가장 최근).</summary>
             readonly LinkedList<(SpriteKey Key, CachedBitmap Bitmap)> recent = new LinkedList<(SpriteKey Key, CachedBitmap Bitmap)>();
             long bytes;
+            long maxBytes = NormalMaxBytes;
 
             public SpriteCache(Image shrimp, Image tempura)
             {
@@ -349,7 +356,21 @@ namespace ShrimpBreak
                 var bitmap = Draw(key);
                 cache[key] = recent.AddFirst((key, bitmap));
                 bytes += BytesOf(bitmap);
-                while (bytes > MaxBytes && recent.Count > 1)
+                Trim();
+                return bitmap;
+            }
+
+            /// <summary>파도가 지나가는 동안에는 상한을 올린다. 평소 상한으로 돌아올 때 넘친 그림은 바로 지운다.</summary>
+            public void SetSweeping(bool isSweeping)
+            {
+                maxBytes = isSweeping ? SweepMaxBytes : NormalMaxBytes;
+                Trim();
+            }
+
+            /// <summary>상한을 넘으면 가장 오래 안 쓴 그림부터 지운다 (방금 쓴 그림 하나는 남긴다).</summary>
+            void Trim()
+            {
+                while (bytes > maxBytes && recent.Count > 1)
                 {
                     var oldest = recent.Last.Value;
                     recent.RemoveLast();
@@ -357,7 +378,6 @@ namespace ShrimpBreak
                     bytes -= BytesOf(oldest.Bitmap);
                     NativeMethods.DeleteObject(oldest.Bitmap.Handle);
                 }
-                return bitmap;
             }
 
             public void Clear()
