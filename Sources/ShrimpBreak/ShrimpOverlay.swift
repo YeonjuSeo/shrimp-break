@@ -574,12 +574,12 @@ private enum Wave {
     // 짧은 물결을 하나 더 겹쳐 뒤쪽도 평평하지 않게 크고 작은 굴곡이 섞이게 한다.
     private static let base: [CGFloat] = [0.20, 0.50, 0.80, 1.15, 1.50]
     private static let amplitude: [CGFloat] = [0.10, 0.35, 0.18, 0.50, 0.28]
-    private static let wavelength: [CGFloat] = [3.6, 5.2, 2.8, 6.4, 4.4]
+    private static let wavelength: [CGFloat] = [6.5, 9.0, 5.0, 11.0, 7.5]
     private static let speed: [CGFloat] = [3.2, 2.6, 3.8, 2.2, 3.0]
     private static let phase: [CGFloat] = [0, 2.1, 4.0, 1.1, 5.2]
-    /// 겹치는 짧은 물결: 진폭은 띠 파고의 40%, 간격은 띠 물결 간격의 47%.
-    private static let rippleAmplitudeRatio: CGFloat = 0.4
-    private static let rippleWavelengthRatio: CGFloat = 0.47
+    /// 겹치는 짧은 물결: 진폭은 띠 파고의 30%, 간격은 띠 물결 간격의 50%.
+    private static let rippleAmplitudeRatio: CGFloat = 0.3
+    private static let rippleWavelengthRatio: CGFloat = 0.5
     /// 앞쪽 비탈 위 마루가 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 물결과 균형이 맞게 너무 높지 않게.
     private static let crest: [CGFloat] = [0.15, 0.25, 0.30, 0.40, 0.45]
     private static let crestWidth: CGFloat = 1.2
