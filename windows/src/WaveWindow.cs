@@ -7,7 +7,7 @@ using System.Windows.Forms;
 namespace ShrimpBreak
 {
     /// <summary>
-    /// 새우를 클릭했을 때 모니터 바닥에 깔리는 파도 (곡선 3개 + 아래를 채운 반투명 물).
+    /// 새우를 클릭했을 때 모니터 바닥에 깔리는 파도 (길고 완만한 물결 띠 5개가 겹겹이 쌓인 납작한 모양).
     /// 클릭은 아래로 그대로 통과하고, 새우 창들보다 아래에 놓인다.
     ///
     /// 성능 메모: 32bpp 비트맵을 한 번만 만들어 두고 그 메모리에 바로 그린 뒤 UpdateLayeredWindow 로 올린다
@@ -15,14 +15,16 @@ namespace ShrimpBreak
     /// </summary>
     sealed class WaveWindow : Form
     {
-        // Mac 버전과 같은 색: 진한 파랑 → 밝은 하늘색. 물은 반투명, 선은 흰 테두리 위에.
+        // Mac 버전과 같은 색: 앞(아래) 진한 남색 → 뒤(위) 아주 밝은 하늘색. 거의 불투명하게.
         static readonly Color[] LaneColors =
         {
-            Color.FromArgb(13, 84, 191),
-            Color.FromArgb(26, 133, 242),
-            Color.FromArgb(77, 184, 255),
+            Color.FromArgb(11, 79, 140),
+            Color.FromArgb(30, 136, 201),
+            Color.FromArgb(91, 192, 235),
+            Color.FromArgb(169, 216, 245),
+            Color.FromArgb(232, 244, 252),
         };
-        const int WaterAlpha = 115; // 0.45
+        const int WaterAlpha = 224; // 0.88
 
         readonly StageGeometry stage;
         readonly double size;
@@ -77,7 +79,6 @@ namespace ShrimpBreak
         {
             var front = WaveSweep.Front(stage, size, t);
             var end = Math.Min(front, stage.MaxX);
-            var lineWidth = (float)Math.Max(4, size * 0.05);
 
             using (var g = Graphics.FromImage(canvas))
             {
@@ -89,7 +90,7 @@ namespace ShrimpBreak
                     var lines = new PointF[WaveSweep.LaneCount][];
                     for (var lane = 0; lane < WaveSweep.LaneCount; lane++) lines[lane] = Curve(lane, t, front, end);
 
-                    // 뒤→앞: 높은 곡선의 물 → 낮은 곡선의 물 → 흰 테두리들 → 색 선들 (아래로 갈수록 진한 물)
+                    // 뒤(높은 띠)부터 앞(낮은 띠) 순서로 칠한다 → 겹겹이 쌓인 물결.
                     for (var lane = WaveSweep.LaneCount - 1; lane >= 0; lane--)
                     {
                         var points = lines[lane];
@@ -100,11 +101,6 @@ namespace ShrimpBreak
                         using (var brush = new SolidBrush(Color.FromArgb(WaterAlpha, LaneColors[lane])))
                             g.FillPolygon(brush, water);
                     }
-                    using (var outline = new Pen(Color.FromArgb(242, Color.White), lineWidth * 1.8f) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
-                        foreach (var points in lines) g.DrawLines(outline, points);
-                    for (var lane = 0; lane < WaveSweep.LaneCount; lane++)
-                        using (var pen = new Pen(LaneColors[lane], lineWidth) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
-                            g.DrawLines(pen, lines[lane]);
                 }
             }
 

@@ -264,20 +264,21 @@ namespace ShrimpBreak
     /// </summary>
     public static class WaveSweep
     {
-        public const double Duration = 2.4;
-        public const double FadeDuration = 0.45;
+        public const double Duration = 1.9;
+        public const double FadeDuration = 0.4;
         public const double TotalDuration = Duration + FadeDuration;
-        public const int LaneCount = 3;
+        /// <summary>겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).</summary>
+        public const int LaneCount = 5;
 
         // 곡선별 높이·진폭·물결 간격(새우 크기 배수)과 출렁임 속도(rad/s)·위상
-        // 곡선마다 파고가 다르게: 아래는 잔잔하고 짧게, 위로 갈수록 크고 길게 출렁인다.
-        static readonly double[] LaneBase = { 0.30, 0.65, 1.0 };
-        static readonly double[] LaneAmplitude = { 0.06, 0.16, 0.26 };
-        static readonly double[] LaneWavelength = { 1.8, 3.0, 4.2 };
-        static readonly double[] LaneSpeed = { 7.0, 5.5, 4.5 };
-        static readonly double[] LanePhase = { 0, 1.7, 3.1 };
-        /// <summary>파도 맨 앞이 솟은 높이 (곡선별, 새우 크기 배수)·폭.</summary>
-        static readonly double[] LaneCrest = { 0.25, 0.45, 0.70 };
+        // 길고 완만한 물결 띠가 겹겹이 쌓인 모양. 띠마다 높이·파고·간격·출렁임 속도를 달리해 단조롭지 않게.
+        static readonly double[] LaneBase = { 0.20, 0.45, 0.72, 1.00, 1.28 };
+        static readonly double[] LaneAmplitude = { 0.12, 0.20, 0.16, 0.26, 0.18 };
+        static readonly double[] LaneWavelength = { 5.0, 6.5, 4.2, 7.5, 5.8 };
+        static readonly double[] LaneSpeed = { 3.2, 2.6, 3.8, 2.2, 3.0 };
+        static readonly double[] LanePhase = { 0, 2.1, 4.0, 1.1, 5.2 };
+        /// <summary>파도 맨 앞이 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 띠일수록 높이 솟는다.</summary>
+        static readonly double[] LaneCrest = { 0.20, 0.30, 0.40, 0.50, 0.60 };
         const double CrestWidth = 1.2;
 
         /// <summary>올라탄 새우가 파도 높이로 옮겨 가는 최대 세로 속도 (초당 새우 크기 배수).</summary>
@@ -305,7 +306,12 @@ namespace ShrimpBreak
         }
 
         /// <summary>끝나갈 때 곡선의 불투명도 (1 → 0).</summary>
-        public static double Opacity(double t) => t <= Duration ? 1 : Math.Max(0, 1 - (t - Duration) / FadeDuration);
+        public static double Opacity(double t)
+        {
+            if (t <= Duration) return 1;
+            if (t >= TotalDuration) return 0; // 계산 오차 없이 끝에서 정확히 0
+            return 1 - (t - Duration) / FadeDuration;
+        }
 
         /// <summary>파도 앞쪽이 새우에 닿았으면 올라태운다. 올라탔으면 true.</summary>
         public static bool TryPickUp(ShrimpBody shrimp, double t, Random random, out WaveRide ride)

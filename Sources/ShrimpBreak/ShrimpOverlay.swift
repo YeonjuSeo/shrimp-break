@@ -32,7 +32,7 @@ final class ShrimpOverlay: NSObject {
     private var globalClickMonitor: Any?
     /// 파도가 쓸어가는 중이면 시작 시각. 모니터별 곡선 레이어는 waveLayers.
     private var sweepStartedAt: CFTimeInterval?
-    private var waveLayers: [CGDirectDisplayID: [WaveLayerPair]] = [:]
+    private var waveLayers: [CGDirectDisplayID: [WaveBand]] = [:]
 
     private static let shrimpSizeMillimeters: CGFloat = 50
     private static let maxShrimps = 40
@@ -115,18 +115,17 @@ final class ShrimpOverlay: NSObject {
         stages.forEach { $0.setAcceptsMouse(false) }
         NSCursor.arrow.set()
 
-        // 새우가 있는 모니터마다 곡선 3개. 새우보다 아래에 깐다.
-        // 쌓는 순서(뒤→앞): 높은 곡선의 물 → 낮은 곡선의 물 → 흰 테두리들 → 색 선들
-        // → 반투명한 물이 겹쳐 아래로 갈수록 진해진다.
+        // 새우가 있는 모니터마다 물결 띠 5개. 새우보다 아래에 깐다.
+        // 뒤(높은 띠)부터 앞(낮은 띠) 순서로 쌓아 겹겹이 쌓인 물결이 되게 한다.
         let homes = Set(shrimps.map { $0.home.id })
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for stage in stages where homes.contains(stage.id) {
-            let size = Self.shrimpSizeMillimeters * stage.pointsPerMillimeter
-            let pairs = (0..<Wave.laneCount).map { WaveLayerPair(lane: $0, lineWidth: max(4, size * 0.05)) }
-            let ordered = pairs.reversed().map(\.water) + pairs.map(\.back) + pairs.map(\.front)
-            for (index, layer) in ordered.enumerated() { stage.rootLayer.insertSublayer(layer, at: UInt32(index)) }
-            waveLayers[stage.id] = pairs
+            let bands = (0..<Wave.laneCount).map { WaveBand(lane: $0) }
+            for (index, band) in bands.reversed().enumerated() {
+                stage.rootLayer.insertSublayer(band.layer, at: UInt32(index))
+            }
+            waveLayers[stage.id] = bands
         }
         CATransaction.commit()
         startAnimating()
@@ -236,22 +235,22 @@ final class ShrimpOverlay: NSObject {
         CATransaction.setDisableActions(true)
         let opacity = Float(Wave.opacity(t))
         for stage in stages {
-            guard let pairs = waveLayers[stage.id] else { continue }
+            guard let bands = waveLayers[stage.id] else { continue }
             let size = Self.shrimpSizeMillimeters * stage.pointsPerMillimeter
             let front = Wave.front(stage.frame, size: size, t: t)
-            for pair in pairs {
+            for band in bands {
                 let line = CGMutablePath()
                 let end = min(front, stage.frame.maxX)
                 var x = stage.frame.minX
                 var lastX = x
                 while x <= end {
                     let point = CGPoint(x: x - stage.frame.minX,
-                                        y: Wave.y(lane: pair.lane, x: x, t: t, front: front, stage: stage.frame, size: size) - stage.frame.minY)
+                                        y: Wave.y(lane: band.lane, x: x, t: t, front: front, stage: stage.frame, size: size) - stage.frame.minY)
                     if line.isEmpty { line.move(to: point) } else { line.addLine(to: point) }
                     lastX = x
                     x += 10
                 }
-                // 물: 곡선 아래를 화면 바닥까지 채운다.
+                // 띠: 물결 윗면 아래를 화면 바닥까지 채운다.
                 let water = CGMutablePath()
                 if !line.isEmpty {
                     water.addPath(line)
@@ -259,10 +258,8 @@ final class ShrimpOverlay: NSObject {
                     water.addLine(to: CGPoint(x: 0, y: 0))
                     water.closeSubpath()
                 }
-                pair.water.path = water
-                pair.back.path = line
-                pair.front.path = line
-                for layer in [pair.water, pair.back, pair.front] { layer.opacity = opacity }
+                band.layer.path = water
+                band.layer.opacity = opacity
             }
         }
         CATransaction.commit()
@@ -404,11 +401,7 @@ final class ShrimpOverlay: NSObject {
         stopAnimating()
         shrimps.flatMap { $0.layers.values }.forEach { $0.removeFromSuperlayer() }
         shrimps.removeAll()
-        waveLayers.values.flatMap { $0 }.forEach {
-            $0.water.removeFromSuperlayer()
-            $0.back.removeFromSuperlayer()
-            $0.front.removeFromSuperlayer()
-        }
+        waveLayers.values.flatMap { $0 }.forEach { $0.layer.removeFromSuperlayer() }
         waveLayers.removeAll()
         sweepStartedAt = nil
         isClearing = false
@@ -507,32 +500,20 @@ private final class WaveRide {
     }
 }
 
-/// 곡선 하나 = 아래를 채운 반투명 물 + 흰 테두리 + 색 선. 어떤 배경에서도 보이도록.
+/// 물결 띠 하나 (선 없이 채운 면). 앞(아래) 진한 남색 → 뒤(위) 아주 밝은 하늘색, 거의 불투명.
 @MainActor
-private struct WaveLayerPair {
+private struct WaveBand {
     let lane: Int
-    let water = CAShapeLayer()
-    let back = CAShapeLayer()
-    let front = CAShapeLayer()
+    let layer = CAShapeLayer()
 
-    init(lane: Int, lineWidth: CGFloat) {
+    init(lane: Int) {
         self.lane = lane
-        // 진한 파랑 → 밝은 하늘색. 어떤 배경에서도 보이도록 흰 테두리를 두껍게 깐다.
-        let colors: [NSColor] = [
-            NSColor(srgbRed: 0.05, green: 0.33, blue: 0.75, alpha: 1),
-            NSColor(srgbRed: 0.10, green: 0.52, blue: 0.95, alpha: 1),
-            NSColor(srgbRed: 0.30, green: 0.72, blue: 1.00, alpha: 1),
+        let colors: [(CGFloat, CGFloat, CGFloat)] = [
+            (11, 79, 140), (30, 136, 201), (91, 192, 235), (169, 216, 245), (232, 244, 252),
         ]
-        for (layer, color, width) in [(back, NSColor.white.withAlphaComponent(0.95), lineWidth * 1.8),
-                                       (front, colors[lane], lineWidth)] {
-            layer.fillColor = nil
-            layer.strokeColor = color.cgColor
-            layer.lineWidth = width
-            layer.lineCap = .round
-            layer.lineJoin = .round
-        }
-        water.fillColor = colors[lane].withAlphaComponent(0.45).cgColor
-        water.strokeColor = nil
+        let (r, g, b) = colors[lane]
+        layer.fillColor = NSColor(srgbRed: r / 255, green: g / 255, blue: b / 255, alpha: 0.88).cgColor
+        layer.strokeColor = nil
     }
 }
 
@@ -540,20 +521,21 @@ private struct WaveLayerPair {
 /// 좌표는 전역(위가 +). 모니터마다 각자 파도가 왼쪽에서 오른쪽으로 지나간다.
 @MainActor
 private enum Wave {
-    static let duration: CGFloat = 2.4
-    static let fadeDuration: CGFloat = 0.45
+    static let duration: CGFloat = 1.9
+    static let fadeDuration: CGFloat = 0.4
     static let totalDuration = duration + fadeDuration
-    static let laneCount = 3
+    /// 겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).
+    static let laneCount = 5
 
-    // 곡선별 높이·진폭·물결 간격(새우 크기 배수)과 출렁임 속도(rad/s)·위상.
-    // 곡선마다 파고가 다르게: 아래는 잔잔하고 짧게, 위로 갈수록 크고 길게 출렁인다.
-    private static let base: [CGFloat] = [0.30, 0.65, 1.0]
-    private static let amplitude: [CGFloat] = [0.06, 0.16, 0.26]
-    private static let wavelength: [CGFloat] = [1.8, 3.0, 4.2]
-    private static let speed: [CGFloat] = [7.0, 5.5, 4.5]
-    private static let phase: [CGFloat] = [0, 1.7, 3.1]
-    /// 파도 맨 앞이 솟은 높이 (곡선별, 새우 크기 배수)·폭.
-    private static let crest: [CGFloat] = [0.25, 0.45, 0.70]
+    // 띠별 높이·파고·물결 간격(새우 크기 배수)과 출렁임 속도(rad/s)·위상.
+    // 길고 완만한 물결 띠가 겹겹이 쌓인 모양. 띠마다 값을 달리해 단조롭지 않게.
+    private static let base: [CGFloat] = [0.20, 0.45, 0.72, 1.00, 1.28]
+    private static let amplitude: [CGFloat] = [0.12, 0.20, 0.16, 0.26, 0.18]
+    private static let wavelength: [CGFloat] = [5.0, 6.5, 4.2, 7.5, 5.8]
+    private static let speed: [CGFloat] = [3.2, 2.6, 3.8, 2.2, 3.0]
+    private static let phase: [CGFloat] = [0, 2.1, 4.0, 1.1, 5.2]
+    /// 파도 맨 앞이 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 띠일수록 높이 솟는다.
+    private static let crest: [CGFloat] = [0.20, 0.30, 0.40, 0.50, 0.60]
     private static let crestWidth: CGFloat = 1.2
     /// 올라탄 새우가 파도 높이로 옮겨 가는 최대 세로 속도 (초당 새우 크기 배수).
     private static let maxSettleSpeedRatio: CGFloat = 8
@@ -573,7 +555,9 @@ private enum Wave {
     }
 
     static func opacity(_ t: CGFloat) -> CGFloat {
-        t <= duration ? 1 : max(0, 1 - (t - duration) / fadeDuration)
+        if t <= duration { return 1 }
+        if t >= totalDuration { return 0 } // 계산 오차 없이 끝에서 정확히 0
+        return 1 - (t - duration) / fadeDuration
     }
 
     /// 파도 앞쪽이 새우에 닿았으면 지금 높이에 가장 가까운 곡선에 올라태운다.
