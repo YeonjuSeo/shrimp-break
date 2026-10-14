@@ -62,7 +62,15 @@ namespace ShrimpBreak
     public static class ShrimpPhysics
     {
         // Mac 버전 값(pt 기준). Windows 에서는 모니터 배율을 곱해 픽셀로 쓴다.
+        /// <summary>가장 작은 새우 크기. 파도 모양의 기준 크기이기도 하다.</summary>
         public const double ShrimpSizeMillimeters = 50;
+        /// <summary>가장 큰 새우 크기 = 나온 모니터 높이의 40%.</summary>
+        public const double MaxSizeScreenRatio = 0.4;
+        /// <summary>
+        /// 크기를 몇 단계로 나눠 고를지. Windows 는 크기마다 그림을 따로 만들어 두므로, 단계로 나눠 같은 크기끼리 그림을 나눠 쓴다
+        /// (Mac 은 그림 하나를 확대해 쓰므로 단계 없이 고른다).
+        /// </summary>
+        public const int SizeSteps = 8;
         public const double GravityPoints = 1664;
         public const double MinSpeedPoints = 128;
         public const double MaxSpeedPoints = 256;
@@ -75,7 +83,14 @@ namespace ShrimpBreak
 
         public static ShrimpBody Spawn(StageGeometry home, Random random)
         {
-            var size = ShrimpSizeMillimeters * home.PixelsPerMillimeter;
+            // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위.
+            var minSize = ShrimpSizeMillimeters * home.PixelsPerMillimeter;
+            var maxSize = Math.Max(minSize, (home.Top - home.Floor) * MaxSizeScreenRatio);
+            return Spawn(home, random, Lerp(minSize, maxSize, random.Next(SizeSteps) / (double)(SizeSteps - 1)));
+        }
+
+        public static ShrimpBody Spawn(StageGeometry home, Random random, double size)
+        {
             var gravity = GravityPoints * home.Scale;
             var peak = Lerp(MinPeakPoints, MaxPeakPoints, random.NextDouble()) * home.Scale;
             var speed = Lerp(MinSpeedPoints, MaxSpeedPoints, random.NextDouble()) * home.Scale;
@@ -91,6 +106,14 @@ namespace ShrimpBreak
                 Vy = Math.Sqrt(2 * gravity * (peak + size)),
                 BounceVelocity = Math.Sqrt(2 * gravity * peak),
             };
+        }
+
+        /// <summary>더 높은 이웃 바닥 위로 올라탈 만큼 뛴다 (이미 그만큼 올라가는 중이면 그대로).</summary>
+        static void ClimbToward(ShrimpBody shrimp, StageGeometry next)
+        {
+            var needed = next.Floor - shrimp.Y + shrimp.Size * ClimbMarginRatio;
+            var reachable = shrimp.Vy > 0 ? shrimp.Vy * shrimp.Vy / (2 * shrimp.Gravity) : 0;
+            if (reachable < needed) shrimp.Vy = Math.Sqrt(2 * shrimp.Gravity * needed);
         }
 
         public static void Move(ShrimpBody shrimp, double dt, IReadOnlyList<StageGeometry> stages)
@@ -114,9 +137,7 @@ namespace ShrimpBreak
                     {
                         // 이웃 바닥이 더 높다 → 경계에 붙어서 올라탈 만큼 점프.
                         newX = towardRight ? home.MaxX - shrimp.Size : home.MinX;
-                        var needed = next.Floor - shrimp.Y + shrimp.Size * ClimbMarginRatio;
-                        var reachable = shrimp.Vy > 0 ? shrimp.Vy * shrimp.Vy / (2 * shrimp.Gravity) : 0;
-                        if (reachable < needed) shrimp.Vy = Math.Sqrt(2 * shrimp.Gravity * needed);
+                        ClimbToward(shrimp, next);
                     }
                     else
                     {
@@ -124,8 +145,18 @@ namespace ShrimpBreak
                         var centerX = newX + shrimp.Size / 2;
                         if (towardRight ? centerX > home.MaxX : centerX < home.MinX)
                         {
-                            home = next;
-                            shrimp.Home = next;
+                            if (shrimp.Y < next.Floor)
+                            {
+                                // 몸을 걸친 채 이웃의 더 높은 바닥보다 아래로 내려왔다 (큰 새우는 건너는 데 오래 걸린다)
+                                // → 몸 중심을 경계에 멈추고, 이웃 바닥 위로 올라탈 만큼 다시 뛴다.
+                                newX = towardRight ? home.MaxX - shrimp.Size / 2 : home.MinX - shrimp.Size / 2;
+                                ClimbToward(shrimp, next);
+                            }
+                            else
+                            {
+                                home = next;
+                                shrimp.Home = next;
+                            }
                         }
                     }
                 }

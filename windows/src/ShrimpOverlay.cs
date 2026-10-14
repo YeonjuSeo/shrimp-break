@@ -307,12 +307,22 @@ namespace ShrimpBreak
             public override int GetHashCode() => (IsTempura ? 1 : 0) ^ (Facing << 1) ^ ((TiltDegrees + 64) << 3) ^ (Size << 11);
         }
 
-        /// <summary>방향·기울기·크기별 새우 그림 (GDI 비트맵). 새우가 사라지면 비운다.</summary>
+        /// <summary>
+        /// 방향·기울기·크기별 새우 그림 (GDI 비트맵). 새우가 사라지면 비운다.
+        /// 큰 새우는 그림 한 장이 수 MB 라서, 모아 둔 그림이 메모리 상한을 넘으면 가장 오래 안 쓴 그림부터 지운다.
+        /// (창에 이미 올린 그림은 창이 따로 복사해 갖고 있어서 지워도 화면에는 영향이 없다.)
+        /// </summary>
         sealed class SpriteCache : IDisposable
         {
+            const long MaxBytes = 128L * 1024 * 1024;
+
             readonly Image shrimp;
             readonly Image tempura;
-            readonly Dictionary<SpriteKey, CachedBitmap> cache = new Dictionary<SpriteKey, CachedBitmap>();
+            readonly Dictionary<SpriteKey, LinkedListNode<(SpriteKey Key, CachedBitmap Bitmap)>> cache =
+                new Dictionary<SpriteKey, LinkedListNode<(SpriteKey Key, CachedBitmap Bitmap)>>();
+            /// <summary>최근에 쓴 순서 (앞쪽이 가장 최근).</summary>
+            readonly LinkedList<(SpriteKey Key, CachedBitmap Bitmap)> recent = new LinkedList<(SpriteKey Key, CachedBitmap Bitmap)>();
+            long bytes;
 
             public SpriteCache(Image shrimp, Image tempura)
             {
@@ -322,17 +332,35 @@ namespace ShrimpBreak
 
             public CachedBitmap Get(SpriteKey key)
             {
-                if (cache.TryGetValue(key, out var cached)) return cached;
-                cached = Draw(key);
-                cache[key] = cached;
-                return cached;
+                if (cache.TryGetValue(key, out var node))
+                {
+                    recent.Remove(node);
+                    recent.AddFirst(node);
+                    return node.Value.Bitmap;
+                }
+                var bitmap = Draw(key);
+                cache[key] = recent.AddFirst((key, bitmap));
+                bytes += BytesOf(bitmap);
+                while (bytes > MaxBytes && recent.Count > 1)
+                {
+                    var oldest = recent.Last.Value;
+                    recent.RemoveLast();
+                    cache.Remove(oldest.Key);
+                    bytes -= BytesOf(oldest.Bitmap);
+                    NativeMethods.DeleteObject(oldest.Bitmap.Handle);
+                }
+                return bitmap;
             }
 
             public void Clear()
             {
-                foreach (var cached in cache.Values) NativeMethods.DeleteObject(cached.Handle);
+                foreach (var entry in recent) NativeMethods.DeleteObject(entry.Bitmap.Handle);
+                recent.Clear();
                 cache.Clear();
+                bytes = 0;
             }
+
+            static long BytesOf(CachedBitmap bitmap) => 4L * bitmap.Side * bitmap.Side;
 
             public void Dispose()
             {
@@ -351,7 +379,11 @@ namespace ShrimpBreak
                     using (var g = Graphics.FromImage(bitmap))
                     {
                         g.Clear(Color.Transparent);
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        var image = key.IsTempura ? tempura : shrimp;
+                        // 원본보다 크게 그릴 땐 어차피 늘린 그림이라, 더 가벼운 방식으로 (큰 새우 그림을 빨리 만들도록).
+                        g.InterpolationMode = size > Math.Max(image.Width, image.Height)
+                            ? InterpolationMode.HighQualityBilinear
+                            : InterpolationMode.HighQualityBicubic;
                         g.SmoothingMode = SmoothingMode.AntiAlias;
                         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                         g.CompositingQuality = CompositingQuality.HighQuality;
@@ -362,7 +394,6 @@ namespace ShrimpBreak
                         g.RotateTransform(-key.TiltDegrees);
                         g.ScaleTransform(key.Facing, 1);
 
-                        var image = key.IsTempura ? tempura : shrimp;
                         var fit = Math.Min(size / (double)image.Width, size / (double)image.Height);
                         var width = (float)(image.Width * fit);
                         var height = (float)(image.Height * fit);

@@ -128,10 +128,22 @@ static class Program
         ShrimpPhysics.Collide(new List<ShrimpBody> { left, right });
         Check(name, "멀어지는 중이면 속도 그대로", left.Vx == -200 && right.Vx == 200, $"{left.Vx}, {right.Vx}");
 
-        // 40마리를 2분 돌리면서 매 프레임 충돌 처리 → 끝났을 때 깊게 겹친 쌍이 거의 없어야 한다
+        // 40마리를 2분 돌리면서 매 프레임 충돌 처리 → 끝났을 때 깊게 겹친 쌍이 거의 없어야 한다.
+        // 겹침은 가장 작은 크기로만 본다 (화면 높이 40%만 한 새우 40마리는 애초에 화면에 다 들어가지 않는다).
+        RunCrowd(name, stage, sameSize: true);
+        // 크기가 제각각이어도 충돌로 벽·바닥 밖으로 크게 밀려나지 않아야 한다.
+        RunCrowd(name, stage, sameSize: false);
+    }
+
+    static void RunCrowd(string name, StageGeometry stage, bool sameSize)
+    {
+        var label = sameSize ? "같은 크기" : "크기 제각각";
         var stages = new[] { stage };
         var random = new Random(7);
-        var shrimps = Enumerable.Range(0, 40).Select(_ => ShrimpPhysics.Spawn(stage, random)).ToList();
+        var smallest = ShrimpPhysics.ShrimpSizeMillimeters * stage.PixelsPerMillimeter;
+        var shrimps = Enumerable.Range(0, 40)
+                                .Select(_ => sameSize ? ShrimpPhysics.Spawn(stage, random, smallest) : ShrimpPhysics.Spawn(stage, random))
+                                .ToList();
         var maxOverlapRatio = 0.0;
         var maxOutside = 0.0;
         var maxBelowFloor = 0.0;
@@ -142,8 +154,9 @@ static class Program
             if (t < 5) continue; // 처음 솟아오르는 동안은 제외
             foreach (var s in shrimps)
             {
-                maxOutside = Math.Max(maxOutside, Math.Max(stage.MinX - s.X, s.X + s.Size - stage.MaxX));
-                maxBelowFloor = Math.Max(maxBelowFloor, stage.Floor - s.Y);
+                // 자기 크기 대비 비율로 본다.
+                maxOutside = Math.Max(maxOutside, Math.Max(stage.MinX - s.X, s.X + s.Size - stage.MaxX) / s.Size);
+                maxBelowFloor = Math.Max(maxBelowFloor, (stage.Floor - s.Y) / s.Size);
             }
             for (var i = 0; i < shrimps.Count; i++)
                 for (var j = i + 1; j < shrimps.Count; j++)
@@ -155,11 +168,11 @@ static class Program
                     maxOverlapRatio = Math.Max(maxOverlapRatio, (min - d) / min);
                 }
         }
-        Console.WriteLine($"[{name}] 40마리 2분: 최대 겹침 {maxOverlapRatio:P0}, 벽 밖으로 최대 {maxOutside:F0}px, 바닥 아래로 최대 {maxBelowFloor:F0}px");
-        Check(name, "40마리가 서로 깊게 파고들지 않음 (겹침 50% 미만)", maxOverlapRatio < 0.5, $"{maxOverlapRatio:P0}");
-        // 밀려난 만큼은 다음 프레임에 벽·바닥 처리로 바로 되돌아온다 → 새우 크기(180px)의 1/4 이내면 눈에 띄지 않는다.
-        Check(name, "충돌로 벽 밖으로 크게 밀려나지 않음", maxOutside < 45, $"{maxOutside:F0}px");
-        Check(name, "충돌로 바닥 아래로 크게 밀려나지 않음", maxBelowFloor < 45, $"{maxBelowFloor:F0}px");
+        Console.WriteLine($"[{name}] {label} 40마리 2분: 최대 겹침 {maxOverlapRatio:P0}, 벽 밖으로 최대 새우 크기의 {maxOutside:P0}, 바닥 아래로 최대 {maxBelowFloor:P0}");
+        if (sameSize) Check(name, "40마리가 서로 깊게 파고들지 않음 (겹침 50% 미만)", maxOverlapRatio < 0.5, $"{maxOverlapRatio:P0}");
+        // 밀려난 만큼은 다음 프레임에 벽·바닥 처리로 바로 되돌아온다 → 새우 크기의 1/4 이내면 눈에 띄지 않는다.
+        Check(name, $"{label}: 충돌로 벽 밖으로 크게 밀려나지 않음", maxOutside < 0.25, $"{maxOutside:P0}");
+        Check(name, $"{label}: 충돌로 바닥 아래로 크게 밀려나지 않음", maxBelowFloor < 0.25, $"{maxBelowFloor:P0}");
     }
 
     /// <summary>
@@ -211,6 +224,7 @@ static class Program
             var rides = new Dictionary<ShrimpBody, WaveRide>();
             var movedLeft = 0;
             var maxJump = 0.0;
+            var maxJumpRatio = 0.0; // 자기 크기 대비
             var total = WaveSweep.TotalDuration(groups);
             var drainStart = groups.Min(WaveSweep.DrainStart);
             double? crowdedRatio = null;
@@ -220,7 +234,7 @@ static class Program
                 if (crowdedRatio == null && t >= drainStart)
                 {
                     crowdedRatio = shrimps.Count(s => rides.TryGetValue(s, out var r)
-                                                      && WaveSweep.Front(r.Group, t) - (s.X + s.Size / 2) < 1.5 * s.Size)
+                                                      && WaveSweep.Front(r.Group, t) - (s.X + s.Size / 2) < 1.5 * r.Group.Size)
                                    / (double)shrimps.Count;
                 }
                 foreach (var s in shrimps)
@@ -238,6 +252,7 @@ static class Program
                     WaveSweep.Ride(s, ride, t, Dt);
                     if (s.X < x - 0.01) movedLeft++;
                     maxJump = Math.Max(maxJump, Math.Abs(s.Y - y));
+                    maxJumpRatio = Math.Max(maxJumpRatio, Math.Abs(s.Y - y) / s.Size);
                 }
             }
 
@@ -248,9 +263,9 @@ static class Program
             Check(name, $"{label}: 모든 새우가 파도에 올라탐", rides.Count == shrimps.Count, $"{rides.Count}/{shrimps.Count}");
             Check(name, $"{label}: 끝나면 모든 새우가 자기 묶음 오른쪽 밖", notOut == 0, $"{notOut}마리 남음");
             Check(name, $"{label}: 올라탄 뒤 왼쪽으로 끌려가지 않음", movedLeft == 0, $"{movedLeft}번");
-            Check(name, $"{label}: 순간이동 없음 (한 프레임 세로 이동 < 새우 크기의 1/3)", maxJump < SizeOf(stages[0]) / 3, $"{maxJump:F0}px");
+            Check(name, $"{label}: 순간이동 없음 (한 프레임 세로 이동 < 자기 크기의 1/3)", maxJumpRatio < 1.0 / 3, $"{maxJumpRatio:P0}");
             Check(name, $"{label}: 다른 묶음(위아래 모니터)의 파도를 타지 않음", switchedGroup == 0, $"{switchedGroup}마리");
-            Console.WriteLine($"   빠져나가기 직전 파도 앞쪽 끝(새우 1.5마리 안)에 몰린 새우 비율 {crowdedRatio:P0}");
+            Console.WriteLine($"   빠져나가기 직전 파도 앞쪽 끝(가장 작은 새우 1.5마리 안)에 몰린 새우 비율 {crowdedRatio:P0}");
             Check(name, $"{label}: 새우들이 파도 앞쪽 끝에 몰리지 않음 (25% 미만)", crowdedRatio < 0.25, $"{crowdedRatio:P0}");
         }
 

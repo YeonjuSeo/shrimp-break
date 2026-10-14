@@ -36,7 +36,10 @@ final class ShrimpOverlay: NSObject {
     /// 파도가 지나가는 모니터 묶음 (좌우로 맞닿은 모니터들). 새우가 있는 묶음만.
     private var waveGroups: [WaveGroup] = []
 
+    /// 가장 작은 새우 크기. 파도 모양의 기준 크기이기도 하다.
     private static let shrimpSizeMillimeters: CGFloat = 50
+    /// 가장 큰 새우 크기 = 나온 모니터 높이의 40%.
+    private static let maxSizeScreenRatio: CGFloat = 0.4
     private static let maxShrimps = 40
     /// 낮을수록 같은 높이를 더 천천히 오르내린다 (통통 튀는 리듬).
     private static let gravity: CGFloat = 1664 // pt/s² — 처음 값(2600)의 0.8² → 같은 높이를 0.8배 속도로
@@ -67,7 +70,9 @@ final class ShrimpOverlay: NSObject {
         guard shrimps.count < Self.maxShrimps,
               let home = stageUnderMouse() ?? stages.first else { return }
 
-        let size = Self.shrimpSizeMillimeters * home.pointsPerMillimeter
+        // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위.
+        let minSize = Self.shrimpSizeMillimeters * home.pointsPerMillimeter
+        let size = CGFloat.random(in: minSize...max(minSize, home.frame.height * Self.maxSizeScreenRatio))
         let isTempura = Double.random(in: 0..<1) < 0.20
         // 높이 제각각으로 통통. 바닥 아래(-size)에서 솟아오른다.
         let peak = CGFloat.random(in: 140...360)
@@ -317,6 +322,13 @@ final class ShrimpOverlay: NSObject {
         }
     }
 
+    /// 더 높은 이웃 바닥 위로 올라탈 만큼 뛴다 (이미 그만큼 올라가는 중이면 그대로).
+    private func climb(_ shrimp: Shrimp, toward next: ScreenStage) {
+        let needed = next.frame.minY - shrimp.y + shrimp.size * Self.climbMarginRatio
+        let reachable = shrimp.vy > 0 ? shrimp.vy * shrimp.vy / (2 * Self.gravity) : 0
+        if reachable < needed { shrimp.vy = sqrt(2 * Self.gravity * needed) }
+    }
+
     private func move(_ shrimp: Shrimp, dt: CGFloat) {
         shrimp.vy -= Self.gravity * dt
         shrimp.y += shrimp.vy * dt
@@ -337,15 +349,20 @@ final class ShrimpOverlay: NSObject {
                 if shrimp.y < next.frame.minY, !isStraddling {
                     // 이웃 바닥이 더 높다 → 경계에 붙어서 올라탈 만큼 점프.
                     newX = towardRight ? home.frame.maxX - shrimp.size : home.frame.minX
-                    let needed = next.frame.minY - shrimp.y + shrimp.size * Self.climbMarginRatio
-                    let reachable = shrimp.vy > 0 ? shrimp.vy * shrimp.vy / (2 * Self.gravity) : 0
-                    if reachable < needed { shrimp.vy = sqrt(2 * Self.gravity * needed) }
+                    climb(shrimp, toward: next)
                 } else {
                     // 몸 중심이 경계를 넘으면 이웃 모니터 소속으로 바뀐다.
                     let centerX = newX + shrimp.size / 2
                     if towardRight ? centerX > home.frame.maxX : centerX < home.frame.minX {
-                        home = next
-                        shrimp.home = next
+                        if shrimp.y < next.frame.minY {
+                            // 몸을 걸친 채 이웃의 더 높은 바닥보다 아래로 내려왔다 (큰 새우는 건너는 데 오래 걸린다)
+                            // → 몸 중심을 경계에 멈추고, 이웃 바닥 위로 올라탈 만큼 다시 뛴다.
+                            newX = towardRight ? home.frame.maxX - shrimp.size / 2 : home.frame.minX - shrimp.size / 2
+                            climb(shrimp, toward: next)
+                        } else {
+                            home = next
+                            shrimp.home = next
+                        }
                     }
                 }
             } else {
