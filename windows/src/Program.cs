@@ -71,6 +71,7 @@ namespace ShrimpBreak
             overlay.ShrimpClicked += clickedTempura =>
             {
                 telemetry.RecordAcknowledge(overlay.Count, clickedTempura);
+                overlay.SweepAway(); // 파도가 쓸어간다 (이후 scheduler 의 정리 요청은 무시됨)
                 scheduler.Acknowledge();
             };
             presence.AwayChanged += scheduler.SetAway;

@@ -12,6 +12,7 @@ namespace ShrimpBreak
         public const int WS_EX_TOOLWINDOW = 0x00000080;
         public const int WS_EX_NOACTIVATE = 0x08000000;
         public const int WS_EX_TOPMOST = 0x00000008;
+        public const int WS_EX_TRANSPARENT = 0x00000020; // 클릭이 아래 창으로 그대로 통과
         public const int WM_MOUSEACTIVATE = 0x0021;
         public const int WM_DPICHANGED = 0x02E0;
         public const int MA_NOACTIVATE = 3;
@@ -77,6 +78,35 @@ namespace ShrimpBreak
 
         [DllImport("user32.dll")]
         public static extern bool DestroyIcon(IntPtr hIcon);
+
+        // ── 파도 창: 한 번 만든 32bpp 비트맵에 바로 그려서 복사 없이 화면에 올린다 ──────
+        [StructLayout(LayoutKind.Sequential)]
+        public struct BITMAPINFOHEADER
+        {
+            public int biSize;
+            public int biWidth;
+            public int biHeight;
+            public short biPlanes;
+            public short biBitCount;
+            public int biCompression;
+            public int biSizeImage;
+            public int biXPelsPerMeter;
+            public int biYPelsPerMeter;
+            public int biClrUsed;
+            public int biClrImportant;
+        }
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER pbmi, uint usage,
+                                                     out IntPtr ppvBits, IntPtr hSection, uint offset);
+
+        /// <summary>창을 맨 위(topmost 무리 안에서도 맨 위)로 올린다. 포커스는 건드리지 않는다.</summary>
+        public static void BringToTop(IntPtr hwnd)
+            => SetWindowPos(hwnd, new IntPtr(-1) /* HWND_TOPMOST */, 0, 0, 0, 0,
+                            0x0001 /* NOSIZE */ | 0x0002 /* NOMOVE */ | 0x0010 /* NOACTIVATE */);
+
+        [DllImport("user32.dll")]
+        static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 
         // ── 마지막 입력 시각 (자리 비움 판정) ─────────────────────────
         [StructLayout(LayoutKind.Sequential)]

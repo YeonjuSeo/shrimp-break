@@ -30,6 +30,9 @@ final class ShrimpOverlay: NSObject {
     private var isHoveringShrimp = false
     /// 새우가 떠 있는 동안에만 켜는 전역 클릭 감지 (아래 updateMousePassThrough 주석 참고).
     private var globalClickMonitor: Any?
+    /// 파도가 쓸어가는 중이면 시작 시각. 모니터별 곡선 레이어는 waveLayers.
+    private var sweepStartedAt: CFTimeInterval?
+    private var waveLayers: [CGDirectDisplayID: [WaveLayerPair]] = [:]
 
     private static let shrimpSizeMillimeters: CGFloat = 50
     private static let maxShrimps = 40
@@ -103,6 +106,32 @@ final class ShrimpOverlay: NSObject {
         CATransaction.commit()
     }
 
+    /// 클릭했을 때: 파도가 밀려와 새우들을 태우고 화면 밖으로 쓸어간다 (약 1.9초 뒤 정리).
+    /// 진행 중에는 clearAll·클릭이 무시된다. 계산 규칙은 Windows 버전 WaveSweep 과 같다(그쪽에 테스트).
+    func sweepAway() {
+        guard !shrimps.isEmpty, !isClearing else { return }
+        isClearing = true
+        sweepStartedAt = CACurrentMediaTime()
+        stages.forEach { $0.setAcceptsMouse(false) }
+        NSCursor.arrow.set()
+
+        // 새우가 있는 모니터마다 곡선 3개. 새우보다 아래에 깐다.
+        // 쌓는 순서(뒤→앞): 높은 곡선의 물 → 낮은 곡선의 물 → 흰 테두리들 → 색 선들
+        // → 반투명한 물이 겹쳐 아래로 갈수록 진해진다.
+        let homes = Set(shrimps.map { $0.home.id })
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for stage in stages where homes.contains(stage.id) {
+            let size = Self.shrimpSizeMillimeters * stage.pointsPerMillimeter
+            let pairs = (0..<Wave.laneCount).map { WaveLayerPair(lane: $0, lineWidth: max(4, size * 0.05)) }
+            let ordered = pairs.reversed().map(\.water) + pairs.map(\.back) + pairs.map(\.front)
+            for (index, layer) in ordered.enumerated() { stage.rootLayer.insertSublayer(layer, at: UInt32(index)) }
+            waveLayers[stage.id] = pairs
+        }
+        CATransaction.commit()
+        startAnimating()
+    }
+
     // MARK: - Stages
 
     private func buildStages() {
@@ -173,16 +202,71 @@ final class ShrimpOverlay: NSObject {
     }
 
     @objc private func step(_ link: CADisplayLink) {
-        guard !isClearing else { return }
         let now = link.timestamp
         // 프레임이 밀려도(멈칫) 새우가 순간이동하지 않도록 dt 상한을 둔다. 60/120Hz 모두 동일 속도.
         let dt = CGFloat(min(1.0 / 20.0, now - (lastTimestamp ?? now)))
         lastTimestamp = now
 
+        if let sweepStartedAt {
+            stepSweep(t: CGFloat(CACurrentMediaTime() - sweepStartedAt), dt: dt)
+            return
+        }
+        guard !isClearing else { return }
+
         shrimps.forEach { move($0, dt: dt) }
         collide()
         render()
         updateMousePassThrough()
+    }
+
+    private func stepSweep(t: CGFloat, dt: CGFloat) {
+        guard t < Wave.totalDuration else { return finishClear() }
+
+        for shrimp in shrimps {
+            if shrimp.ride == nil, let ride = Wave.pickUp(shrimp, t: t) { shrimp.ride = ride }
+            if let ride = shrimp.ride {
+                Wave.ride(shrimp, ride, t: t, dt: dt)
+            } else {
+                move(shrimp, dt: dt) // 파도가 아직 안 닿은 새우는 계속 튄다
+            }
+        }
+
+        // 곡선 다시 그리기 (지나간 자리까지만, 끝나갈 땐 옅어짐)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let opacity = Float(Wave.opacity(t))
+        for stage in stages {
+            guard let pairs = waveLayers[stage.id] else { continue }
+            let size = Self.shrimpSizeMillimeters * stage.pointsPerMillimeter
+            let front = Wave.front(stage.frame, size: size, t: t)
+            for pair in pairs {
+                let line = CGMutablePath()
+                let end = min(front, stage.frame.maxX)
+                var x = stage.frame.minX
+                var lastX = x
+                while x <= end {
+                    let point = CGPoint(x: x - stage.frame.minX,
+                                        y: Wave.y(lane: pair.lane, x: x, t: t, front: front, stage: stage.frame, size: size) - stage.frame.minY)
+                    if line.isEmpty { line.move(to: point) } else { line.addLine(to: point) }
+                    lastX = x
+                    x += 10
+                }
+                // 물: 곡선 아래를 화면 바닥까지 채운다.
+                let water = CGMutablePath()
+                if !line.isEmpty {
+                    water.addPath(line)
+                    water.addLine(to: CGPoint(x: lastX - stage.frame.minX, y: 0))
+                    water.addLine(to: CGPoint(x: 0, y: 0))
+                    water.closeSubpath()
+                }
+                pair.water.path = water
+                pair.back.path = line
+                pair.front.path = line
+                for layer in [pair.water, pair.back, pair.front] { layer.opacity = opacity }
+            }
+        }
+        CATransaction.commit()
+        render()
     }
 
     /// 새우끼리 부딪히면 튕긴다 (Windows 버전 ShrimpPhysics.Collide 와 같은 규칙, 그쪽에 시뮬레이션 테스트가 있다).
@@ -282,13 +366,15 @@ final class ShrimpOverlay: NSObject {
         for shrimp in shrimps {
             // 기울기 때문에 살짝 삐져나오는 부분까지 포함.
             let bounds = shrimp.rect.insetBy(dx: -shrimp.size * 0.2, dy: -shrimp.size * 0.2)
-            // 진행 방향을 바라보고, 오를 땐 고개를 들고 떨어질 땐 숙인다.
-            let facing: CGFloat = shrimp.vx >= 0 ? 1 : -1
-            let tilt = max(-1, min(1, shrimp.vy / shrimp.bounceVelocity)) * 0.18 * facing
+            // 진행 방향을 바라보고, 오를 땐 고개를 들고 떨어질 땐 숙인다. 파도를 탈 땐 기우뚱.
+            let facing: CGFloat = shrimp.ride != nil || shrimp.vx >= 0 ? 1 : -1
+            let tilt = shrimp.ride?.tilt ?? max(-1, min(1, shrimp.vy / shrimp.bounceVelocity)) * 0.18 * facing
             let transform = CGAffineTransform(rotationAngle: tilt).scaledBy(x: facing, y: 1)
 
             for stage in stages {
-                guard stage.frame.intersects(bounds) else {
+                // 파도를 탄 새우는 그 모니터 밖(이웃 모니터)으로는 그리지 않는다 → 화면 끝에서 빠져나가 사라진다.
+                let isOtherStage = shrimp.ride.map { $0.stage !== stage } ?? false
+                guard stage.frame.intersects(bounds), !isOtherStage else {
                     shrimp.layers.removeValue(forKey: stage.id)?.removeFromSuperlayer()
                     continue
                 }
@@ -318,6 +404,13 @@ final class ShrimpOverlay: NSObject {
         stopAnimating()
         shrimps.flatMap { $0.layers.values }.forEach { $0.removeFromSuperlayer() }
         shrimps.removeAll()
+        waveLayers.values.flatMap { $0 }.forEach {
+            $0.water.removeFromSuperlayer()
+            $0.back.removeFromSuperlayer()
+            $0.front.removeFromSuperlayer()
+        }
+        waveLayers.removeAll()
+        sweepStartedAt = nil
         isClearing = false
         isHoveringShrimp = false
         stages.forEach {
@@ -371,6 +464,8 @@ private final class Shrimp {
     var vx: CGFloat
     var vy: CGFloat
     let bounceVelocity: CGFloat
+    /// 파도에 올라탔으면 그 상태.
+    var ride: WaveRide?
     /// 몸이 걸쳐 있는 모니터별 레이어.
     var layers: [CGDirectDisplayID: CALayer] = [:]
 
@@ -388,6 +483,129 @@ private final class Shrimp {
     }
 
     var rect: CGRect { CGRect(x: x, y: y, width: size, height: size) }
+}
+
+// MARK: - Wave (클릭했을 때 파도가 쓸어가는 연출)
+
+@MainActor
+private final class WaveRide {
+    let lane: Int
+    /// 파도 앞쪽에서 얼마나 뒤에 붙어 가는지 (새우 크기 배수, 음수).
+    let offsetRatio: CGFloat
+    /// 새우마다 출렁임이 다르게 보이도록 하는 위상.
+    let seed: CGFloat
+    /// 올라탄 모니터 (이 모니터의 파도를 따라간다).
+    let stage: ScreenStage
+    /// 그림 기울기 (라디안).
+    var tilt: CGFloat = 0
+
+    init(lane: Int, offsetRatio: CGFloat, seed: CGFloat, stage: ScreenStage) {
+        self.lane = lane
+        self.offsetRatio = offsetRatio
+        self.seed = seed
+        self.stage = stage
+    }
+}
+
+/// 곡선 하나 = 아래를 채운 반투명 물 + 흰 테두리 + 색 선. 어떤 배경에서도 보이도록.
+@MainActor
+private struct WaveLayerPair {
+    let lane: Int
+    let water = CAShapeLayer()
+    let back = CAShapeLayer()
+    let front = CAShapeLayer()
+
+    init(lane: Int, lineWidth: CGFloat) {
+        self.lane = lane
+        // 진한 파랑 → 밝은 하늘색. 어떤 배경에서도 보이도록 흰 테두리를 두껍게 깐다.
+        let colors: [NSColor] = [
+            NSColor(srgbRed: 0.05, green: 0.33, blue: 0.75, alpha: 1),
+            NSColor(srgbRed: 0.10, green: 0.52, blue: 0.95, alpha: 1),
+            NSColor(srgbRed: 0.30, green: 0.72, blue: 1.00, alpha: 1),
+        ]
+        for (layer, color, width) in [(back, NSColor.white.withAlphaComponent(0.95), lineWidth * 1.8),
+                                       (front, colors[lane], lineWidth)] {
+            layer.fillColor = nil
+            layer.strokeColor = color.cgColor
+            layer.lineWidth = width
+            layer.lineCap = .round
+            layer.lineJoin = .round
+        }
+        water.fillColor = colors[lane].withAlphaComponent(0.45).cgColor
+        water.strokeColor = nil
+    }
+}
+
+/// 파도 계산 규칙. Windows 버전 ShrimpPhysics.cs 의 WaveSweep 과 같은 값·식 (그쪽에 시뮬레이션 테스트가 있다).
+/// 좌표는 전역(위가 +). 모니터마다 각자 파도가 왼쪽에서 오른쪽으로 지나간다.
+@MainActor
+private enum Wave {
+    static let duration: CGFloat = 2.4
+    static let fadeDuration: CGFloat = 0.45
+    static let totalDuration = duration + fadeDuration
+    static let laneCount = 3
+
+    // 곡선별 높이·진폭·물결 간격(새우 크기 배수)과 출렁임 속도(rad/s)·위상.
+    // 곡선마다 파고가 다르게: 아래는 잔잔하고 짧게, 위로 갈수록 크고 길게 출렁인다.
+    private static let base: [CGFloat] = [0.30, 0.65, 1.0]
+    private static let amplitude: [CGFloat] = [0.06, 0.16, 0.26]
+    private static let wavelength: [CGFloat] = [1.8, 3.0, 4.2]
+    private static let speed: [CGFloat] = [7.0, 5.5, 4.5]
+    private static let phase: [CGFloat] = [0, 1.7, 3.1]
+    /// 파도 맨 앞이 솟은 높이 (곡선별, 새우 크기 배수)·폭.
+    private static let crest: [CGFloat] = [0.25, 0.45, 0.70]
+    private static let crestWidth: CGFloat = 1.2
+    /// 올라탄 새우가 파도 높이로 옮겨 가는 최대 세로 속도 (초당 새우 크기 배수).
+    private static let maxSettleSpeedRatio: CGFloat = 8
+
+    /// t 초일 때 파도 앞쪽의 x. 화면 왼쪽 밖(새우 1마리)에서 오른쪽 밖(새우 2마리)까지.
+    static func front(_ stage: CGRect, size: CGFloat, t: CGFloat) -> CGFloat {
+        let progress = min(1, max(0, t / duration))
+        return stage.minX - size + (stage.width + 3 * size) * progress
+    }
+
+    static func y(lane: Int, x: CGFloat, t: CGFloat, front: CGFloat, stage: CGRect, size: CGFloat) -> CGFloat {
+        var y = stage.minY + base[lane] * size
+            + amplitude[lane] * size * sin(2 * .pi * x / (wavelength[lane] * size) - speed[lane] * t + phase[lane])
+        let behind = (front - x) / (crestWidth * size)
+        if behind >= 0 { y += crest[lane] * size * exp(-behind * behind) }
+        return y
+    }
+
+    static func opacity(_ t: CGFloat) -> CGFloat {
+        t <= duration ? 1 : max(0, 1 - (t - duration) / fadeDuration)
+    }
+
+    /// 파도 앞쪽이 새우에 닿았으면 지금 높이에 가장 가까운 곡선에 올라태운다.
+    static func pickUp(_ shrimp: Shrimp, t: CGFloat) -> WaveRide? {
+        let stage = shrimp.home
+        let front = front(stage.frame, size: shrimp.size, t: t)
+        guard front >= shrimp.x + shrimp.size * 0.3 else { return nil }
+        let centerX = shrimp.x + shrimp.size / 2
+        let lane = (0..<laneCount).min { a, b in
+            abs(y(lane: a, x: centerX, t: t, front: front, stage: stage.frame, size: shrimp.size) - shrimp.y)
+                < abs(y(lane: b, x: centerX, t: t, front: front, stage: stage.frame, size: shrimp.size) - shrimp.y)
+        } ?? 0
+        return WaveRide(lane: lane, offsetRatio: -0.3 - 0.6 * .random(in: 0...1),
+                        seed: .random(in: 0...(2 * .pi)), stage: stage)
+    }
+
+    /// 올라탄 새우를 파도와 함께 옮긴다. 위아래로 출렁이고 좌우로 기우뚱한다.
+    static func ride(_ shrimp: Shrimp, _ ride: WaveRide, t: CGFloat, dt: CGFloat) {
+        let size = shrimp.size
+        let front = front(ride.stage.frame, size: size, t: t)
+        // 앞쪽에 밀려 오른쪽으로만 간다 (뒤로 끌려가지 않도록).
+        shrimp.x = max(shrimp.x, front + ride.offsetRatio * size - size / 2)
+        let bob = 0.06 * size * sin(11 * t + ride.seed)
+        let target = y(lane: ride.lane, x: shrimp.x + size / 2, t: t, front: front, stage: ride.stage.frame, size: size)
+            - 0.25 * size + bob
+        // 순간이동 없이 따라가되, 높이 떠 있던 새우도 파도 위로 내려앉는 듯 보이도록 세로 속도에 상한.
+        let step = (target - shrimp.y) * min(1, dt * 10)
+        let maxStep = maxSettleSpeedRatio * size * dt
+        shrimp.y += max(-maxStep, min(maxStep, step))
+        shrimp.vx = 1 // 오른쪽을 바라본다
+        ride.tilt = 0.35 * sin(8 * t + ride.seed)
+    }
 }
 
 // MARK: - Images

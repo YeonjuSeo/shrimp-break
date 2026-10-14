@@ -239,4 +239,116 @@ namespace ShrimpBreak
 
         static double Lerp(double a, double b, double t) => a + (b - a) * t;
     }
+
+    /// <summary>파도에 올라탄 새우의 상태.</summary>
+    public sealed class WaveRide
+    {
+        /// <summary>올라탄 곡선 (0 = 가장 낮은 곡선).</summary>
+        public int Lane;
+        /// <summary>파도 앞쪽에서 얼마나 뒤에 붙어 가는지 (새우 크기 배수, 음수).</summary>
+        public double OffsetRatio;
+        /// <summary>새우마다 출렁임이 다르게 보이도록 하는 위상.</summary>
+        public double Seed;
+        /// <summary>올라탄 모니터 (이 모니터의 파도를 따라간다).</summary>
+        public StageGeometry Stage;
+        /// <summary>그림 기울기 (라디안, 위가 + 인 좌표 기준으로 시계 반대 방향 +).</summary>
+        public double Tilt;
+    }
+
+    /// <summary>
+    /// 새우를 클릭했을 때 파도가 쓸어가는 연출 (Mac 버전 ShrimpOverlay 의 파도와 같은 규칙).
+    /// 좌표는 위가 + 인 좌표. 모니터마다 각자 파도가 왼쪽에서 오른쪽으로 지나간다.
+    /// - 곡선 3개가 출렁이고, 맨 앞쪽은 볼록하게 솟아 있다.
+    /// - 파도 앞쪽이 새우에 닿으면 새우가 곡선 하나에 올라타 흔들리며 함께 쓸려 간다.
+    /// - 앞쪽이 화면 오른쪽 밖까지 지나가면(Duration) 곡선이 옅어지며(FadeDuration) 끝난다.
+    /// </summary>
+    public static class WaveSweep
+    {
+        public const double Duration = 2.4;
+        public const double FadeDuration = 0.45;
+        public const double TotalDuration = Duration + FadeDuration;
+        public const int LaneCount = 3;
+
+        // 곡선별 높이·진폭·물결 간격(새우 크기 배수)과 출렁임 속도(rad/s)·위상
+        // 곡선마다 파고가 다르게: 아래는 잔잔하고 짧게, 위로 갈수록 크고 길게 출렁인다.
+        static readonly double[] LaneBase = { 0.30, 0.65, 1.0 };
+        static readonly double[] LaneAmplitude = { 0.06, 0.16, 0.26 };
+        static readonly double[] LaneWavelength = { 1.8, 3.0, 4.2 };
+        static readonly double[] LaneSpeed = { 7.0, 5.5, 4.5 };
+        static readonly double[] LanePhase = { 0, 1.7, 3.1 };
+        /// <summary>파도 맨 앞이 솟은 높이 (곡선별, 새우 크기 배수)·폭.</summary>
+        static readonly double[] LaneCrest = { 0.25, 0.45, 0.70 };
+        const double CrestWidth = 1.2;
+
+        /// <summary>올라탄 새우가 파도 높이로 옮겨 가는 최대 세로 속도 (초당 새우 크기 배수).</summary>
+        public const double MaxSettleSpeedRatio = 8;
+
+        /// <summary>곡선이 차지하는 가장 높은 높이 (바닥 기준, 새우 크기 배수, 선 두께 여유 포함). 파도 창 높이를 정하는 데 쓴다.</summary>
+        public static readonly double MaxHeightRatio =
+            Enumerable.Range(0, LaneCount).Max(lane => LaneBase[lane] + LaneAmplitude[lane] + LaneCrest[lane]) + 0.15;
+
+        /// <summary>t 초일 때 파도 앞쪽의 x. 화면 왼쪽 밖(새우 1마리)에서 오른쪽 밖(새우 2마리)까지.</summary>
+        public static double Front(StageGeometry stage, double size, double t)
+        {
+            var progress = Math.Min(1, Math.Max(0, t / Duration));
+            return stage.MinX - size + (stage.MaxX - stage.MinX + 3 * size) * progress;
+        }
+
+        /// <summary>곡선 lane 의 x 위치 높이. x 가 앞쪽보다 뒤(왼쪽)일 때만 의미가 있다.</summary>
+        public static double WaveY(int lane, double x, double t, double front, StageGeometry stage, double size)
+        {
+            var y = stage.Floor + LaneBase[lane] * size
+                    + LaneAmplitude[lane] * size * Math.Sin(2 * Math.PI * x / (LaneWavelength[lane] * size) - LaneSpeed[lane] * t + LanePhase[lane]);
+            var behind = (front - x) / (CrestWidth * size);
+            if (behind >= 0) y += LaneCrest[lane] * size * Math.Exp(-behind * behind);
+            return y;
+        }
+
+        /// <summary>끝나갈 때 곡선의 불투명도 (1 → 0).</summary>
+        public static double Opacity(double t) => t <= Duration ? 1 : Math.Max(0, 1 - (t - Duration) / FadeDuration);
+
+        /// <summary>파도 앞쪽이 새우에 닿았으면 올라태운다. 올라탔으면 true.</summary>
+        public static bool TryPickUp(ShrimpBody shrimp, double t, Random random, out WaveRide ride)
+        {
+            ride = null;
+            var stage = shrimp.Home;
+            var front = Front(stage, shrimp.Size, t);
+            if (front < shrimp.X + shrimp.Size * 0.3) return false;
+            // 지금 높이에 가장 가까운 곡선에 올라탄다 (갑자기 위아래로 튀지 않도록).
+            var lane = 0;
+            var best = double.MaxValue;
+            for (var i = 0; i < LaneCount; i++)
+            {
+                var gap = Math.Abs(WaveY(i, shrimp.X + shrimp.Size / 2, t, front, stage, shrimp.Size) - shrimp.Y);
+                if (gap < best) { best = gap; lane = i; }
+            }
+            ride = new WaveRide
+            {
+                Lane = lane,
+                OffsetRatio = -0.3 - 0.6 * random.NextDouble(),
+                Seed = random.NextDouble() * 2 * Math.PI,
+                Stage = stage,
+            };
+            return true;
+        }
+
+        /// <summary>올라탄 새우를 파도와 함께 옮긴다. 위아래로 출렁이고 좌우로 기우뚱한다.</summary>
+        public static void Ride(ShrimpBody shrimp, WaveRide ride, double t, double dt)
+        {
+            var size = shrimp.Size;
+            var front = Front(ride.Stage, size, t);
+            var centerX = front + ride.OffsetRatio * size;
+            // 앞쪽에 밀려 오른쪽으로만 간다 (뒤로 끌려가지 않도록).
+            shrimp.X = Math.Max(shrimp.X, centerX - size / 2);
+            var bob = 0.06 * size * Math.Sin(11 * t + ride.Seed);
+            var target = WaveY(ride.Lane, shrimp.X + size / 2, t, front, ride.Stage, size) - 0.25 * size + bob;
+            // 처음 올라탈 때 순간이동하지 않도록 부드럽게 따라가되, 높이 떠 있던 새우도
+            // 파도 위로 내려앉는 듯 보이도록 세로 속도에 상한(초당 새우 크기의 8배)을 둔다.
+            var step = (target - shrimp.Y) * Math.Min(1, dt * 10);
+            var maxStep = MaxSettleSpeedRatio * size * dt;
+            shrimp.Y += Math.Max(-maxStep, Math.Min(maxStep, step));
+            shrimp.Vx = 1; // 오른쪽을 바라본다
+            ride.Tilt = 0.35 * Math.Sin(8 * t + ride.Seed);
+        }
+    }
 }

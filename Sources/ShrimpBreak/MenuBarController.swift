@@ -104,6 +104,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let summon = item("지금 새우 부르기 (테스트)", #selector(handleSummonNow), key: "t")
         summon.isEnabled = scheduler.phase != .paused && scheduler.phase != .away
         menu.addItem(summon)
+        // 새우를 직접 클릭하지 않고 파도 연출을 확인하는 용도 (클릭과 같은 흐름)
+        let wave = item("지금 파도 부르기 (테스트)", #selector(handleWaveNow), key: "w")
+        wave.isEnabled = scheduler.phase == .alerting
+        menu.addItem(wave)
         #endif
         menu.addItem(.separator())
 
@@ -230,6 +234,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     #if SHRIMP_DEV_TOOLS
     @objc private func handleSummonNow() {
         if scheduler.phase == .alerting { overlay.spawn() } else { scheduler.triggerNow() }
+    }
+
+    @objc private func handleWaveNow() {
+        overlay.sweepAway()
+        scheduler.acknowledge()
     }
     #endif
 

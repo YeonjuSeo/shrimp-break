@@ -134,6 +134,14 @@ namespace ShrimpBreak
             });
             summon.Enabled = scheduler.Phase != Phase.Paused && scheduler.Phase != Phase.Away;
             menu.Items.Add(summon);
+            // 새우를 직접 클릭하지 않고 파도 연출을 확인하는 용도 (클릭과 같은 흐름)
+            var wave = Item("지금 파도 부르기 (테스트)", () =>
+            {
+                overlay.SweepAway();
+                scheduler.Acknowledge();
+            });
+            wave.Enabled = scheduler.Phase == Phase.Alerting;
+            menu.Items.Add(wave);
 #endif
             menu.Items.Add(new ToolStripSeparator());
 

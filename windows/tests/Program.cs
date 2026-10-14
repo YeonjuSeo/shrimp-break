@@ -33,6 +33,7 @@ static class Program
         RunScenario("모니터 사이 틈", new[] { gapA, gapB }, expectCrossing: false);
 
         RunCollisionTests();
+        RunWaveSweepTests();
 
         Console.WriteLine(failures == 0 ? "\n✓ 모든 시나리오 통과" : $"\n✗ 실패 {failures}건");
         return failures == 0 ? 0 : 1;
@@ -159,6 +160,59 @@ static class Program
         // 밀려난 만큼은 다음 프레임에 벽·바닥 처리로 바로 되돌아온다 → 새우 크기(180px)의 1/4 이내면 눈에 띄지 않는다.
         Check(name, "충돌로 벽 밖으로 크게 밀려나지 않음", maxOutside < 45, $"{maxOutside:F0}px");
         Check(name, "충돌로 바닥 아래로 크게 밀려나지 않음", maxBelowFloor < 45, $"{maxBelowFloor:F0}px");
+    }
+
+    /// <summary>파도 쓸어가기: 모두 올라타고, 끝나면 모두 화면 오른쪽 밖, 올라탄 뒤 왼쪽으로 돌아가지 않음.</summary>
+    static void RunWaveSweepTests()
+    {
+        const string name = "파도 쓸어가기";
+        foreach (var (label, stage) in new[]
+        {
+            ("가로 4K", StageGeometry.FromScreen("wide", -2560, 0, 739, 2179, 1.0, 3.6)),
+            ("세로 4K", StageGeometry.FromScreen("tall", 0, 1440, 0, 2512, 1.0, 3.6)),
+            ("1080p 150%", StageGeometry.FromScreen("fhd", 0, 1920, 0, 1008, 1.5, 3.6)),
+        })
+        {
+            var random = new Random(11);
+            var shrimps = Enumerable.Range(0, 40).Select(_ => ShrimpPhysics.Spawn(stage, random)).ToList();
+            // 1~3초 튀게 해서 높이·위치를 섞어 둔다.
+            for (var t = 0.0; t < 2.5; t += Dt)
+            {
+                foreach (var s in shrimps) ShrimpPhysics.Move(s, Dt, new[] { stage });
+                ShrimpPhysics.Collide(shrimps);
+            }
+
+            var rides = new Dictionary<ShrimpBody, WaveRide>();
+            var movedLeft = 0;
+            var maxJump = 0.0;
+            for (var t = 0.0; t <= WaveSweep.TotalDuration; t += Dt)
+            {
+                foreach (var s in shrimps)
+                {
+                    if (!rides.TryGetValue(s, out var ride))
+                    {
+                        if (WaveSweep.TryPickUp(s, t, random, out ride)) rides[s] = ride;
+                        else
+                        {
+                            ShrimpPhysics.Move(s, Dt, new[] { stage });
+                            continue;
+                        }
+                    }
+                    var (x, y) = (s.X, s.Y);
+                    WaveSweep.Ride(s, ride, t, Dt);
+                    if (s.X < x - 0.01) movedLeft++;
+                    maxJump = Math.Max(maxJump, Math.Abs(s.Y - y));
+                }
+            }
+            var allPicked = rides.Count == shrimps.Count;
+            var leftmost = shrimps.Min(s => s.X);
+            Console.WriteLine($"[{name}] {label}: 올라탄 새우 {rides.Count}/{shrimps.Count}, 끝났을 때 가장 왼쪽 새우 x={leftmost:F0} (화면 오른쪽 끝 {stage.MaxX:F0}), 한 프레임 최대 세로 이동 {maxJump:F0}px");
+            Check(name, $"{label}: 모든 새우가 파도에 올라탐", allPicked, $"{rides.Count}/{shrimps.Count}");
+            Check(name, $"{label}: 끝나면 모든 새우가 화면 오른쪽 밖", leftmost >= stage.MaxX, $"가장 왼쪽 {leftmost:F0}");
+            Check(name, $"{label}: 올라탄 뒤 왼쪽으로 끌려가지 않음", movedLeft == 0, $"{movedLeft}번");
+            Check(name, $"{label}: 올라탈 때 순간이동 없음 (한 프레임 세로 이동 < 새우 크기의 1/3)", maxJump < shrimps[0].Size / 3, $"{maxJump:F0}px");
+        }
+        Check(name, "끝나면 곡선이 완전히 투명", WaveSweep.Opacity(WaveSweep.TotalDuration) == 0, $"{WaveSweep.Opacity(WaveSweep.TotalDuration)}");
     }
 
     static void Check(string scenario, string what, bool ok, string detail)

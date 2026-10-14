@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // overlay·scheduler 가 자기 자신을 붙잡는 순환 참조가 되지 않도록 weak 로 잡는다.
         overlay.onShrimpClicked = { [weak overlay, scheduler, telemetry] clickedTempura in
             telemetry.recordAcknowledge(shrimpCount: overlay?.count ?? 0, clickedTempura: clickedTempura)
+            overlay?.sweepAway() // 파도가 쓸어간다 (이후 scheduler 의 정리 요청은 무시됨)
             scheduler.acknowledge()
         }
         presence.onAwayChanged = { [scheduler] away in scheduler.setAway(away) }

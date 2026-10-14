@@ -23,9 +23,9 @@ namespace ShrimpBreak
     {
         const int MaxShrimps = 40;
         const double TempuraChance = 0.20;
-        /// <summary>기울기 단계 (-2 ~ 2). 단계를 줄일수록 그림 교체가 줄어 가볍다.</summary>
-        const int TiltSteps = 2;
-        /// <summary>최대 기울기 (Mac 버전 0.18rad ≈ 10.3°).</summary>
+        /// <summary>기울기를 몇 도 단위로 나눠 그림을 만들어 둘지. 단위를 키울수록 그림 교체가 줄어 가볍다.</summary>
+        const int TiltQuantumDegrees = 4;
+        /// <summary>튀는 동안 최대 기울기 (Mac 버전 0.18rad ≈ 10.3°).</summary>
         const double MaxTiltDegrees = 10.3;
         /// <summary>사라질 때 페이드 프레임 수 (약 0.2초).</summary>
         const int FadeFrames = 12;
@@ -38,6 +38,11 @@ namespace ShrimpBreak
         List<StageGeometry> stages;
         double lastSeconds;
         bool isClearing;
+        /// <summary>클릭해서 파도가 쓸어가는 중인지, 시작 시각, 모니터별 파도 창.</summary>
+        bool isSweeping;
+        double sweepStartedAt;
+        int sweepFrame;
+        readonly List<WaveWindow> waveWindows = new List<WaveWindow>();
         int fadeFrame;
         bool isHighResolutionTimer;
 
@@ -69,6 +74,30 @@ namespace ShrimpBreak
 
             Render(sprite, force: true); // 그림을 먼저 올린 뒤 보여줘야 깜빡임이 없다.
             window.Show();
+            StartAnimating();
+        }
+
+        /// <summary>
+        /// 클릭했을 때: 파도가 밀려와 새우들을 태우고 화면 밖으로 쓸어간다 (약 2.9초 뒤 정리).
+        /// 진행 중에는 ClearAll·클릭이 무시된다. 계산 규칙은 ShrimpPhysics.cs 의 WaveSweep (테스트 있음).
+        /// </summary>
+        public void SweepAway()
+        {
+            if (shrimps.Count == 0 || isClearing) return;
+            isClearing = true;
+            isSweeping = true;
+            sweepStartedAt = clock.Elapsed.TotalSeconds;
+            sweepFrame = 0;
+
+            // 새우가 있는 모니터마다 파도 창을 깔고, 새우 창들을 그 위로 다시 올린다.
+            foreach (var stage in shrimps.Select(sprite => sprite.Body.Home).Distinct())
+            {
+                var wave = new WaveWindow(stage, ShrimpPhysics.ShrimpSizeMillimeters * stage.PixelsPerMillimeter);
+                wave.Draw(0);
+                wave.Show();
+                waveWindows.Add(wave);
+            }
+            foreach (var sprite in shrimps) NativeMethods.BringToTop(sprite.Window.Handle);
             StartAnimating();
         }
 
@@ -121,6 +150,11 @@ namespace ShrimpBreak
             var dt = Math.Min(1.0 / 20, now - lastSeconds);
             lastSeconds = now;
 
+            if (isSweeping)
+            {
+                StepSweep(now - sweepStartedAt, dt);
+                return;
+            }
             if (isClearing)
             {
                 fadeFrame++;
@@ -135,24 +169,48 @@ namespace ShrimpBreak
             foreach (var sprite in shrimps) Render(sprite, force: false);
         }
 
+        void StepSweep(double t, double dt)
+        {
+            if (t >= WaveSweep.TotalDuration)
+            {
+                FinishClear();
+                return;
+            }
+            foreach (var sprite in shrimps)
+            {
+                if (sprite.Ride == null && WaveSweep.TryPickUp(sprite.Body, t, random, out var ride)) sprite.Ride = ride;
+                if (sprite.Ride != null) WaveSweep.Ride(sprite.Body, sprite.Ride, t, dt);
+                else ShrimpPhysics.Move(sprite.Body, dt, stages); // 파도가 아직 안 닿은 새우는 계속 튄다
+                Render(sprite, force: false);
+            }
+            // 파도는 초당 30번만 다시 그린다 (새우 위치는 매 프레임).
+            if (sweepFrame++ % 2 == 0) foreach (var wave in waveWindows) wave.Draw(t);
+        }
+
         void Render(Sprite sprite, bool force)
         {
             var body = sprite.Body;
-            // 진행 방향을 바라보고, 오를 땐 고개를 들고 떨어질 땐 숙인다.
-            var key = new SpriteKey(sprite.IsTempura, body.Vx >= 0 ? 1 : -1,
-                                    (int)Math.Round(ShrimpPhysics.Lift(body) * TiltSteps), (int)Math.Round(body.Size));
+            // 진행 방향을 바라보고, 오를 땐 고개를 들고 떨어질 땐 숙인다. 파도를 탈 땐 기우뚱.
+            var facing = sprite.Ride != null || body.Vx >= 0 ? 1 : -1;
+            var tiltDegrees = sprite.Ride != null
+                ? sprite.Ride.Tilt * 180 / Math.PI
+                : ShrimpPhysics.Lift(body) * MaxTiltDegrees * facing;
+            var key = new SpriteKey(sprite.IsTempura, facing,
+                                    (int)(Math.Round(tiltDegrees / TiltQuantumDegrees) * TiltQuantumDegrees), (int)Math.Round(body.Size));
             var bitmap = sprites.Get(key);
             // 그림의 "바닥 중앙"이 새우 몸의 바닥 중앙에 오도록. 화면 y 는 아래가 + 라서 부호를 뒤집는다.
             sprite.TopLeft = new Point((int)Math.Round(body.X + body.Size / 2 - bitmap.Side / 2.0),
                                        (int)Math.Round(-body.Y - (bitmap.Side + body.Size) / 2.0));
+            // 파도를 타고 자기 모니터 오른쪽 끝을 완전히 빠져나간 새우는 숨긴다 (이웃 모니터에 나타나지 않도록).
+            byte opacity = sprite.Ride != null && body.X >= sprite.Ride.Stage.MaxX ? (byte)0 : (byte)255;
             if (force || !key.Equals(sprite.Key))
             {
-                sprite.Window.Present(bitmap.Handle, bitmap.Side, sprite.TopLeft, 255);
+                sprite.Window.Present(bitmap.Handle, bitmap.Side, sprite.TopLeft, opacity);
                 sprite.Key = key;
             }
             else
             {
-                sprite.Window.MoveTo(sprite.TopLeft, 255);
+                sprite.Window.MoveTo(sprite.TopLeft, opacity);
             }
         }
 
@@ -166,6 +224,13 @@ namespace ShrimpBreak
             }
             shrimps.Clear();
             sprites.Clear(); // 새우가 없을 때는 비트맵도 들고 있지 않는다.
+            foreach (var wave in waveWindows)
+            {
+                wave.Close();
+                wave.Dispose();
+            }
+            waveWindows.Clear();
+            isSweeping = false;
             isClearing = false;
         }
 
@@ -206,29 +271,32 @@ namespace ShrimpBreak
             public ShrimpWindow Window { get; }
             public SpriteKey Key { get; set; }
             public Point TopLeft { get; set; }
+            /// <summary>파도에 올라탔으면 그 상태.</summary>
+            public WaveRide Ride { get; set; }
         }
 
         readonly struct SpriteKey : IEquatable<SpriteKey>
         {
-            public SpriteKey(bool isTempura, int facing, int tiltStep, int size)
+            public SpriteKey(bool isTempura, int facing, int tiltDegrees, int size)
             {
                 IsTempura = isTempura;
                 Facing = facing;
-                TiltStep = tiltStep;
+                TiltDegrees = tiltDegrees;
                 Size = size;
             }
 
             public bool IsTempura { get; }
             public int Facing { get; }
-            public int TiltStep { get; }
+            /// <summary>그림 기울기 (도, 위가 + 인 좌표 기준 시계 반대 방향 +, Mac 버전 tilt 와 같은 뜻).</summary>
+            public int TiltDegrees { get; }
             public int Size { get; }
 
             public bool Equals(SpriteKey other) => IsTempura == other.IsTempura && Facing == other.Facing
-                                                   && TiltStep == other.TiltStep && Size == other.Size;
+                                                   && TiltDegrees == other.TiltDegrees && Size == other.Size;
 
             public override bool Equals(object obj) => obj is SpriteKey other && Equals(other);
 
-            public override int GetHashCode() => (IsTempura ? 1 : 0) ^ (Facing << 1) ^ ((TiltStep + 8) << 3) ^ (Size << 8);
+            public override int GetHashCode() => (IsTempura ? 1 : 0) ^ (Facing << 1) ^ ((TiltDegrees + 64) << 3) ^ (Size << 11);
         }
 
         /// <summary>방향·기울기·크기별 새우 그림 (GDI 비트맵). 새우가 사라지면 비운다.</summary>
@@ -283,7 +351,7 @@ namespace ShrimpBreak
                         // 바닥 중앙을 기준으로 기울이고 좌우를 뒤집는다 (Mac: 회전 후 좌우 반전과 같은 순서).
                         // 화면 y 가 아래로 + 라서 회전 방향은 Mac 과 반대 부호.
                         g.TranslateTransform(side / 2f, (side + size) / 2f);
-                        g.RotateTransform((float)(-key.TiltStep / (double)TiltSteps * MaxTiltDegrees * key.Facing));
+                        g.RotateTransform(-key.TiltDegrees);
                         g.ScaleTransform(key.Facing, 1);
 
                         var image = key.IsTempura ? tempura : shrimp;
