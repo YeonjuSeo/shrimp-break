@@ -226,12 +226,12 @@ static class Program
             var maxJump = 0.0;
             var maxJumpRatio = 0.0; // 자기 크기 대비
             var total = WaveSweep.TotalDuration(groups);
-            var drainStart = groups.Min(WaveSweep.DrainStart);
+            var frontArrival = groups.Min(WaveSweep.FrontArrival);
             double? crowdedRatio = null;
             for (var t = 0.0; t <= total; t += Dt)
             {
-                // 물이 빠져나가기 직전: 새우들이 파도 앞쪽 끝에 몰려 있지 않고 곳곳에 흩어져 타고 있어야 한다.
-                if (crowdedRatio == null && t >= drainStart)
+                // 앞쪽이 오른쪽 끝에 닿을 때: 새우들이 파도 앞쪽 끝에 몰려 있지 않고 곳곳에 흩어져 타고 있어야 한다.
+                if (crowdedRatio == null && t >= frontArrival)
                 {
                     crowdedRatio = shrimps.Count(s => rides.TryGetValue(s, out var r)
                                                       && WaveSweep.Front(r.Group, t) - (s.X + s.Size / 2) < 1.5 * r.Group.Size)
@@ -265,7 +265,7 @@ static class Program
             Check(name, $"{label}: 올라탄 뒤 왼쪽으로 끌려가지 않음", movedLeft == 0, $"{movedLeft}번");
             Check(name, $"{label}: 순간이동 없음 (한 프레임 세로 이동 < 자기 크기의 1/3)", maxJumpRatio < 1.0 / 3, $"{maxJumpRatio:P0}");
             Check(name, $"{label}: 다른 묶음(위아래 모니터)의 파도를 타지 않음", switchedGroup == 0, $"{switchedGroup}마리");
-            Console.WriteLine($"   빠져나가기 직전 파도 앞쪽 끝(가장 작은 새우 1.5마리 안)에 몰린 새우 비율 {crowdedRatio:P0}");
+            Console.WriteLine($"   앞쪽이 끝에 닿을 때 파도 앞쪽 끝(가장 작은 새우 1.5마리 안)에 몰린 새우 비율 {crowdedRatio:P0}");
             Check(name, $"{label}: 새우들이 파도 앞쪽 끝에 몰리지 않음 (25% 미만)", crowdedRatio < 0.25, $"{crowdedRatio:P0}");
         }
 
@@ -278,7 +278,7 @@ static class Program
         // 바닥(높이 0)에서 시작하는 것은 오른쪽 앞쪽뿐: 앞쪽이 지나간 뒤 왼쪽 끝은 빠지기 시작할 때까지 본래 높이로 차 있어야 한다.
         var leftFullFrom = (single.MinX + 3 * single.Size - WaveSweep.Front(single, 0)) / (WaveSweep.SpeedRatio * single.Size);
         var leftLowest = double.MaxValue;
-        for (var t = leftFullFrom; t <= WaveSweep.DrainStart(single) + 0.1; t += 0.01)
+        for (var t = leftFullFrom; t <= WaveSweep.FrontArrival(single) + 0.1; t += 0.01)
             for (var lane = 0; lane < WaveSweep.LaneCount; lane++)
                 leftLowest = Math.Min(leftLowest, WaveSweep.WaveY(lane, single.MinX, t, single, floor) - floor);
         Console.WriteLine($"[{name}] 왼쪽 끝 가장 낮은 띠 높이 {leftLowest:F1}px");

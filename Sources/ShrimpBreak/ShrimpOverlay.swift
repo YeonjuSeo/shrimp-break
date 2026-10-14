@@ -574,20 +574,18 @@ private struct WaveBand {
 /// 파도 계산 규칙. Windows 버전 ShrimpPhysics.cs 의 WaveSweep 과 같은 값·식 (그쪽에 시뮬레이션 테스트가 있다).
 /// 좌표는 전역(위가 +). 모니터 묶음마다 파도 하나가 이어서 지나간다. 물결 모양은 이어지고, 높이는 각 모니터 바닥에 붙는다.
 ///
-/// 1) 밀려들기: 파도 앞쪽이 빠르게 왼쪽에서 오른쪽으로 덮어 온다. 물 전체도 천천히 오른쪽으로 흐른다.
+/// 1) 밀려들기: 파도 앞쪽이 일정한 빠르기로 왼쪽에서 오른쪽으로 덮어 온다. 물 전체도 처음부터 끝까지 일정한 빠르기로 오른쪽으로 흐른다.
 /// 2) 올라타기: 앞쪽이 닿으면 새우는 그 자리에서 띠 위로 들어 올려져, 물과 함께 흐르며 띠의 굴곡을 따라 울렁인다.
-/// 3) 빠져나가기: 앞쪽이 묶음 오른쪽 끝에 닿으면 물 전체가 점점 빨라지며 오른쪽으로 빠져나가고 (새우도 함께),
-///    새우가 다 나갈 즈음 수위가 바닥까지 가라앉는다.
+/// 3) 빠져나가기: 새우는 물과 함께 같은 빠르기로 오른쪽 밖으로 나가고, 다 나갈 즈음 수위가 바닥까지 가라앉는다.
+/// 앞쪽이 물보다 빨라야 새우들이 앞쪽 끝에 몰리지 않고 올라탄 자리 간격을 유지한 채 흘러간다.
 /// 바닥(높이 0)에서 시작하는 것은 오른쪽 앞쪽뿐이다. 왼쪽은 화면 끝까지 본래 높이로 물이 차 있다.
 @MainActor
 private enum Wave {
-    /// 파도 앞쪽이 밀려드는 빠르기 (초당 새우 크기 배수).
-    static let speedRatio: CGFloat = 12.5
-    /// 물이 흐르는 빠르기 (앞쪽 빠르기 대비): 밀려드는 동안 → 빠져나갈 때.
-    static let flowRatioWhileFlooding: CGFloat = 0.3
-    static let flowRatioWhileDraining: CGFloat = 1.8
-    /// 빠져나가기 시작할 때 물이 빨라지는 데 걸리는 시간.
-    static let drainRampSeconds: CGFloat = 0.4
+    /// 파도 앞쪽이 밀려드는 빠르기 (초당 새우 크기 배수, 일정).
+    static let speedRatio: CGFloat = 34
+    /// 물(과 올라탄 새우)이 흐르는 빠르기 (초당 새우 크기 배수, 처음부터 끝까지 일정).
+    /// 예전의 느린 흐름(12.5 × 0.3)과 빠르게 빠져나가는 흐름(12.5 × 1.8)의 평균.
+    static let flowRatio: CGFloat = 13.1
     /// 앞쪽이 묶음 왼쪽 끝보다 얼마나 앞(왼쪽)에서 출발하는지 (새우 크기 배수).
     static let frontStartRatio: CGFloat = 0.5
     /// 빠져나갈 때 수위가 바닥까지 가라앉는 데 걸리는 시간. 새우가 묶음 밖으로 다 나가는 시각에 맞춰 끝난다.
@@ -648,45 +646,29 @@ private enum Wave {
 
     private static func frontSpeed(_ group: WaveGroup) -> CGFloat { speedRatio * group.size }
 
-    /// 앞쪽이 묶음 오른쪽 끝에 닿아 물이 빠져나가기 시작하는 시각.
-    static func drainStart(_ group: WaveGroup) -> CGFloat {
+    /// 앞쪽이 묶음 오른쪽 끝에 닿는 시각. 모든 새우는 이때까지 올라탄다.
+    static func frontArrival(_ group: WaveGroup) -> CGFloat {
         (group.maxX - group.minX + frontStartRatio * group.size) / frontSpeed(group)
     }
 
-    /// t 초까지 물이 오른쪽으로 흘러간 거리. 처음엔 천천히, 빠져나갈 때 빨라진다.
-    static func shift(_ group: WaveGroup, t: CGFloat) -> CGFloat {
-        let t = max(0, t)
-        let t0 = drainStart(group)
-        let t1 = t0 + drainRampSeconds
-        let ramped: CGFloat = t <= t0 ? 0 : t <= t1 ? (t - t0) * (t - t0) / (2 * drainRampSeconds) : drainRampSeconds / 2 + (t - t1)
-        return frontSpeed(group) * (flowRatioWhileFlooding * t + (flowRatioWhileDraining - flowRatioWhileFlooding) * ramped)
-    }
+    /// t 초까지 물이 오른쪽으로 흘러간 거리 (일정한 빠르기).
+    static func shift(_ group: WaveGroup, t: CGFloat) -> CGFloat { flowRatio * group.size * max(0, t) }
 
-    /// t 초일 때 파도 앞쪽의 x. 빠져나갈 때 물이 더 빨라지면 앞쪽도 물과 함께 간다.
+    /// t 초일 때 파도 앞쪽의 x (일정한 빠르기).
     static func front(_ group: WaveGroup, t: CGFloat) -> CGFloat {
-        let start = group.minX - frontStartRatio * group.size
-        let flooding = start + frontSpeed(group) * max(0, t)
-        let t0 = drainStart(group)
-        guard t > t0 else { return flooding }
-        let withWater = start + frontSpeed(group) * t0 + shift(group, t: t) - shift(group, t: t0)
-        return max(flooding, withWater)
+        group.minX - frontStartRatio * group.size + frontSpeed(group) * max(0, t)
     }
 
-    /// 올라탄 새우가 모두 묶음 오른쪽 밖으로 나가는 시각 (shift 를 거꾸로 푼 값).
-    /// 새우는 묶음 왼쪽 끝 이후에서 빠지기 전에 올라타므로, 빠지기 시작한 뒤 물이 (묶음 폭 + 새우 1마리)만큼 흐르면 다 나간다.
+    /// 올라탄 새우가 모두 묶음 오른쪽 밖으로 나가는 시각.
+    /// 새우는 앞쪽이 오른쪽 끝에 닿기 전에 모두 올라타고, 몸 중심이 묶음 왼쪽 끝 이후에 있으므로
+    /// 그 뒤 물이 (묶음 폭 + 새우 1마리)만큼 흐르면 다 나간다.
     private static func exitTime(_ group: WaveGroup) -> CGFloat {
-        let distance = group.maxX - group.minX + group.size
-        let t0 = drainStart(group)
-        let t1 = t0 + drainRampSeconds
-        // t > t1 구간: shift(t) - shift(t0) = V(a(t - t0) + (b-a)(ramp/2 + t - t1)) = distance 를 t 에 대해 푼다.
-        let t = (distance / frontSpeed(group) + flowRatioWhileFlooding * t0
-            + (flowRatioWhileDraining - flowRatioWhileFlooding) * (t1 - drainRampSeconds / 2)) / flowRatioWhileDraining
-        return max(t, t1) // 빨라지는 도중에 나간다면 t1 로 넉넉히
+        frontArrival(group) + (group.maxX - group.minX + group.size) / (flowRatio * group.size)
     }
 
     /// 수위가 가라앉기 시작하는 시각.
     private static func subsideStart(_ group: WaveGroup) -> CGFloat {
-        max(drainStart(group), exitTime(group) - subsideSeconds)
+        max(frontArrival(group), exitTime(group) - subsideSeconds)
     }
 
     /// 수위가 바닥까지 다 가라앉는 시각 = 파도가 끝나는 시각.
