@@ -243,16 +243,16 @@ final class ShrimpOverlay: NSObject {
         for stage in stages {
             guard let bands = waveLayers[stage.id], let group = waveGroups.first(where: { $0.contains(stage) }) else { continue }
             let opacity = Float(Wave.opacity(group, t: t))
-            let front = Wave.front(group, t: t)
+            let begin = max(Wave.tail(group, t: t), stage.frame.minX)
+            let end = min(Wave.front(group, t: t), stage.frame.maxX)
             for band in bands {
-                // 물결 모양·앞쪽은 묶음 전체로 이어지고, 높이는 이 모니터 바닥에 붙는다.
+                // 물결 모양·앞쪽·뒤꼬리는 묶음 전체로 이어지고, 높이는 이 모니터 바닥에 붙는다.
                 let line = CGMutablePath()
-                let end = min(front, stage.frame.maxX)
-                var x = stage.frame.minX
+                var x = begin
                 var lastX = x
                 while x <= end {
                     let point = CGPoint(x: x - stage.frame.minX,
-                                        y: Wave.y(lane: band.lane, x: x, t: t, front: front, floor: stage.frame.minY, size: group.size) - stage.frame.minY)
+                                        y: Wave.y(lane: band.lane, x: x, t: t, group: group, floor: stage.frame.minY) - stage.frame.minY)
                     if line.isEmpty { line.move(to: point) } else { line.addLine(to: point) }
                     lastX = x
                     x = x < end && x + 10 > end ? end : x + 10 // 마지막 점은 앞쪽에 딱 맞춘다
@@ -262,7 +262,7 @@ final class ShrimpOverlay: NSObject {
                 if !line.isEmpty {
                     water.addPath(line)
                     water.addLine(to: CGPoint(x: lastX - stage.frame.minX, y: 0))
-                    water.addLine(to: CGPoint(x: 0, y: 0))
+                    water.addLine(to: CGPoint(x: begin - stage.frame.minX, y: 0))
                     water.closeSubpath()
                 }
                 band.layer.path = water
@@ -491,8 +491,8 @@ private final class Shrimp {
 @MainActor
 private final class WaveRide {
     let lane: Int
-    /// 파도 앞쪽에서 얼마나 뒤에 붙어 가는지 (새우 크기 배수, 음수).
-    let offsetRatio: CGFloat
+    /// 올라탄 자리 (물과 함께 흘러가는 좌표). 새우 중심 x = patternX + 물이 흘러간 거리.
+    let patternX: CGFloat
     /// 새우마다 출렁임이 다르게 보이도록 하는 위상.
     let seed: CGFloat
     /// 올라탄 파도의 모니터 묶음 (이 묶음 끝까지 쓸려 간다).
@@ -500,9 +500,9 @@ private final class WaveRide {
     /// 그림 기울기 (라디안).
     var tilt: CGFloat = 0
 
-    init(lane: Int, offsetRatio: CGFloat, seed: CGFloat, group: WaveGroup) {
+    init(lane: Int, patternX: CGFloat, seed: CGFloat, group: WaveGroup) {
         self.lane = lane
-        self.offsetRatio = offsetRatio
+        self.patternX = patternX
         self.seed = seed
         self.group = group
     }
@@ -517,18 +517,18 @@ private final class WaveGroup {
     let maxX: CGFloat
     /// 물결 모양의 기준 크기 (모니터마다 새우 크기가 조금 달라도 물결이 끊기지 않도록 하나로).
     let size: CGFloat
+    /// 파도가 밀려와서 물이 묶음 오른쪽 밖으로 다 빠져나갈 때까지 걸리는 시간.
+    private(set) var duration: CGFloat = 0
 
     init(stages: [ScreenStage], size: CGFloat) {
         self.stages = stages
         self.size = size
         minX = stages.map(\.frame.minX).min() ?? 0
         maxX = stages.map(\.frame.maxX).max() ?? 0
+        duration = Wave.endTime(self)
     }
 
     func contains(_ stage: ScreenStage) -> Bool { stages.contains { $0 === stage } }
-
-    /// 파도 앞쪽이 묶음 왼쪽 끝 조금 앞에서 출발해, 모든 새우가 오른쪽 밖으로 나갈 때까지 걸리는 시간.
-    var duration: CGFloat { (maxX - minX + (Wave.frontStartRatio + Wave.frontEndRatio) * size) / (Wave.speedRatio * size) }
 
     /// x 위치의 모니터 (묶음 바깥이면 가장 가까운 끝 모니터).
     func stage(at x: CGFloat) -> ScreenStage {
@@ -555,17 +555,28 @@ private struct WaveBand {
 }
 
 /// 파도 계산 규칙. Windows 버전 ShrimpPhysics.cs 의 WaveSweep 과 같은 값·식 (그쪽에 시뮬레이션 테스트가 있다).
-/// 좌표는 전역(위가 +). 모니터 묶음마다 파도 하나가 왼쪽 끝에서 오른쪽 끝까지 이어서 지나간다.
-/// 속도는 "초당 새우 크기 몇 배"로 정한다 → 모니터가 많아 거리가 길어도 같은 빠르기로 보인다.
+/// 좌표는 전역(위가 +). 모니터 묶음마다 파도 하나가 이어서 지나간다. 물결 모양은 이어지고, 높이는 각 모니터 바닥에 붙는다.
+///
+/// 1) 밀려들기: 파도 앞쪽이 빠르게 왼쪽에서 오른쪽으로 덮어 온다. 물 전체도 천천히 오른쪽으로 흐른다.
+/// 2) 올라타기: 앞쪽이 닿으면 새우는 그 자리에서 띠 위로 들어 올려져, 물과 함께 흐르며 띠의 굴곡을 따라 울렁인다.
+/// 3) 빠져나가기: 앞쪽이 묶음 오른쪽 끝에 닿으면 물 전체가 점점 빨라지며 오른쪽으로 빠져나간다 (새우도 함께).
+/// 앞쪽·뒤꼬리 모두 바닥으로 내려앉는 비탈이라 수직으로 끊겨 보이지 않는다.
 @MainActor
 private enum Wave {
-    /// 파도 앞쪽이 나아가는 빠르기 (초당 새우 크기 배수). 가로 4K 한 대 ≈ 1.6초.
+    /// 파도 앞쪽이 밀려드는 빠르기 (초당 새우 크기 배수).
     static let speedRatio: CGFloat = 12.5
+    /// 물이 흐르는 빠르기 (앞쪽 빠르기 대비): 밀려드는 동안 → 빠져나갈 때.
+    static let flowRatioWhileFlooding: CGFloat = 0.3
+    static let flowRatioWhileDraining: CGFloat = 1.8
+    /// 빠져나가기 시작할 때 물이 빨라지는 데 걸리는 시간.
+    static let drainRampSeconds: CGFloat = 0.4
     /// 앞쪽이 묶음 왼쪽 끝보다 얼마나 앞(왼쪽)에서 출발하는지 (새우 크기 배수).
     static let frontStartRatio: CGFloat = 0.5
-    /// 앞쪽이 묶음 오른쪽 끝을 얼마나 지나서 멈추는지 (새우 크기 배수). 비탈 뒤에 탄 새우까지 다 빠져나가도록.
-    static let frontEndRatio: CGFloat = 4.5
-    static let fadeDuration: CGFloat = 0.4
+    /// 뒤꼬리가 묶음 왼쪽 끝보다 얼마나 뒤에서 출발하는지, 뒤꼬리 비탈 길이 (새우 크기 배수).
+    static let tailStartRatio: CGFloat = 3
+    static let tailRampRatio: CGFloat = 3
+    /// 물이 다 빠져나간 뒤 남은 띠를 지우는 시간 (이미 화면 밖이라 짧게).
+    static let fadeDuration: CGFloat = 0.1
     /// 겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).
     static let laneCount = 5
 
@@ -618,76 +629,112 @@ private enum Wave {
         (groups.map(\.duration).max() ?? 0) + fadeDuration
     }
 
-    /// t 초일 때 파도 앞쪽의 x.
-    static func front(_ group: WaveGroup, t: CGFloat) -> CGFloat {
-        min(group.maxX + frontEndRatio * group.size,
-            group.minX - frontStartRatio * group.size + speedRatio * group.size * max(0, t))
+    private static func frontSpeed(_ group: WaveGroup) -> CGFloat { speedRatio * group.size }
+
+    /// 앞쪽이 묶음 오른쪽 끝에 닿아 물이 빠져나가기 시작하는 시각.
+    static func drainStart(_ group: WaveGroup) -> CGFloat {
+        (group.maxX - group.minX + frontStartRatio * group.size) / frontSpeed(group)
     }
 
-    /// 띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준).
-    /// 앞쪽에서는 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
-    static func y(lane: Int, x: CGFloat, t: CGFloat, front: CGFloat, floor: CGFloat, size: CGFloat) -> CGFloat {
-        let behind = max(0, front - x)
+    /// t 초까지 물이 오른쪽으로 흘러간 거리. 처음엔 천천히, 빠져나갈 때 빨라진다.
+    static func shift(_ group: WaveGroup, t: CGFloat) -> CGFloat {
+        let t = max(0, t)
+        let t0 = drainStart(group)
+        let t1 = t0 + drainRampSeconds
+        let ramped: CGFloat = t <= t0 ? 0 : t <= t1 ? (t - t0) * (t - t0) / (2 * drainRampSeconds) : drainRampSeconds / 2 + (t - t1)
+        return frontSpeed(group) * (flowRatioWhileFlooding * t + (flowRatioWhileDraining - flowRatioWhileFlooding) * ramped)
+    }
+
+    /// t 초일 때 파도 앞쪽의 x. 빠져나갈 때 물이 더 빨라지면 앞쪽도 물과 함께 간다.
+    static func front(_ group: WaveGroup, t: CGFloat) -> CGFloat {
+        let start = group.minX - frontStartRatio * group.size
+        let flooding = start + frontSpeed(group) * max(0, t)
+        let t0 = drainStart(group)
+        guard t > t0 else { return flooding }
+        let withWater = start + frontSpeed(group) * t0 + shift(group, t: t) - shift(group, t: t0)
+        return max(flooding, withWater)
+    }
+
+    /// t 초일 때 파도 뒤꼬리의 x (물과 함께 흘러간다).
+    static func tail(_ group: WaveGroup, t: CGFloat) -> CGFloat {
+        group.minX - tailStartRatio * group.size + shift(group, t: t)
+    }
+
+    /// 뒤꼬리 비탈까지 묶음 오른쪽 밖으로 다 나가는 시각 (shift 를 거꾸로 푼 값).
+    static func endTime(_ group: WaveGroup) -> CGFloat {
+        let distance = group.maxX - group.minX + (tailStartRatio + tailRampRatio) * group.size
+        let t1 = drainStart(group) + drainRampSeconds
+        return (distance / frontSpeed(group) + (flowRatioWhileDraining - flowRatioWhileFlooding) * (t1 - drainRampSeconds / 2))
+            / flowRatioWhileDraining
+    }
+
+    /// 띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준). 물결 모양은 물과 함께 흘러간다.
+    /// 앞쪽·뒤꼬리에서는 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
+    static func y(lane: Int, x: CGFloat, t: CGFloat, group: WaveGroup, floor: CGFloat) -> CGFloat {
+        let size = group.size
+        let front = front(group, t: t)
+        let tail = tail(group, t: t)
+        guard x <= front, x >= tail else { return floor }
+
+        let behind = front - x
         let rampLength = ramp[lane] * size
         let crestOffset = (behind - 0.9 * rampLength) / (crestWidth * size)
         let laneAmplitude = amplitude[lane] * size
         let laneWavelength = wavelength[lane] * size
+        let flowing = x - shift(group, t: t) // 물과 함께 흘러가는 좌표
         let height = base[lane] * size
-            + laneAmplitude * sin(2 * .pi * x / laneWavelength - speed[lane] * t + phase[lane])
+            + laneAmplitude * sin(2 * .pi * flowing / laneWavelength - speed[lane] * t + phase[lane])
             + laneAmplitude * rippleAmplitudeRatio
-                * sin(2 * .pi * x / (laneWavelength * rippleWavelengthRatio) + 1.6 * speed[lane] * t + 2 * phase[lane])
+                * sin(2 * .pi * flowing / (laneWavelength * rippleWavelengthRatio) + 1.6 * speed[lane] * t + 2 * phase[lane])
             + crest[lane] * size * exp(-crestOffset * crestOffset)
-        let progress = min(1, behind / rampLength)
-        let envelope = progress * progress * (3 - 2 * progress) // smoothstep: 맨 앞 0 → 비탈 끝 1
-        return floor + height * envelope
+        return floor + height * smoothStep(behind / rampLength) * smoothStep((x - tail) / (tailRampRatio * size))
     }
 
-    /// 새우가 앞쪽에서 얼마나 뒤에 타는지 (새우 크기 배수, 음수). 띠의 비탈 위 마루 근처.
-    private static func rideOffsetRatio(lane: Int) -> CGFloat {
-        -ramp[lane] * (0.75 + 0.35 * .random(in: 0...1))
+    private static func smoothStep(_ value: CGFloat) -> CGFloat {
+        let p = min(1, max(0, value))
+        return p * p * (3 - 2 * p)
     }
 
-    /// 끝나갈 때 띠의 불투명도 (1 → 0). 묶음마다 자기 파도가 다 지나간 뒤 옅어진다.
+    /// 끝나갈 때 띠의 불투명도 (1 → 0). 이미 화면 밖이라 짧게.
     static func opacity(_ group: WaveGroup, t: CGFloat) -> CGFloat {
         if t <= group.duration { return 1 }
         if t >= group.duration + fadeDuration { return 0 } // 계산 오차 없이 끝에서 정확히 0
         return 1 - (t - group.duration) / fadeDuration
     }
 
-    /// 파도 앞쪽이 새우에 닿았으면 지금 높이에 가장 가까운 띠에 올라태운다.
+    /// 파도 앞쪽이 새우에 닿았으면 그 자리에서 띠에 올라태운다 (높이 떠 있던 새우는 위쪽 띠에).
     static func pickUp(_ shrimp: Shrimp, group: WaveGroup, t: CGFloat) -> WaveRide? {
-        let front = front(group, t: t)
-        guard front >= shrimp.x + shrimp.size * 0.3 else { return nil }
+        guard front(group, t: t) >= shrimp.x + shrimp.size * 0.3 else { return nil }
         let centerX = shrimp.x + shrimp.size / 2
-        let floor = group.stage(at: centerX).frame.minY
-        let lane = (0..<laneCount).min { a, b in
-            abs(y(lane: a, x: centerX, t: t, front: front, floor: floor, size: group.size) - shrimp.y)
-                < abs(y(lane: b, x: centerX, t: t, front: front, floor: floor, size: group.size) - shrimp.y)
-        } ?? 0
-        return WaveRide(lane: lane, offsetRatio: rideOffsetRatio(lane: lane),
+        let heightAboveFloor = shrimp.y - group.stage(at: centerX).frame.minY
+        let lane = (0..<laneCount).min { abs(base[$0] * group.size - heightAboveFloor) < abs(base[$1] * group.size - heightAboveFloor) } ?? 0
+        return WaveRide(lane: lane, patternX: centerX - shift(group, t: t),
                         seed: .random(in: 0...(2 * .pi)), group: group)
     }
 
-    /// 올라탄 새우를 파도와 함께 옮긴다. 위아래로 출렁이고 좌우로 기우뚱한다. 옆 모니터로 넘어가면 그 바닥을 따른다.
+    /// 올라탄 새우를 물과 함께 흘려보낸다. 올라탄 자리를 지키며 띠의 굴곡을 따라 오르내리고 기운다.
+    /// 옆 모니터로 넘어가면 그 바닥을 따른다.
     static func ride(_ shrimp: Shrimp, _ ride: WaveRide, t: CGFloat, dt: CGFloat) {
         let size = shrimp.size
         let group = ride.group
-        let front = front(group, t: t)
-        // 앞쪽에 밀려 오른쪽으로만 간다 (뒤로 끌려가지 않도록).
-        shrimp.x = max(shrimp.x, front + ride.offsetRatio * size - size / 2)
-        let centerX = shrimp.x + size / 2
+        // 물과 함께 오른쪽으로만 간다 (뒤로 끌려가지 않도록).
+        let centerX = max(shrimp.x + size / 2, ride.patternX + shift(group, t: t))
+        shrimp.x = centerX - size / 2
         let stage = group.stage(at: centerX)
         shrimp.home = stage
-        let bob = 0.06 * size * sin(11 * t + ride.seed)
-        let target = y(lane: ride.lane, x: centerX, t: t, front: front, floor: stage.frame.minY, size: group.size)
-            - 0.25 * size + bob
+        let floor = stage.frame.minY
+        let bob = 0.04 * size * sin(9 * t + ride.seed)
+        let target = y(lane: ride.lane, x: centerX, t: t, group: group, floor: floor) - 0.25 * size + bob
         // 순간이동 없이 따라가되, 높이 떠 있던 새우·바닥 높이가 다른 모니터로 넘어간 새우도
         // 파도 위로 내려앉는 듯 보이도록 세로 속도에 상한.
         let step = (target - shrimp.y) * min(1, dt * 10)
         let maxStep = maxSettleSpeedRatio * size * dt
         shrimp.y += max(-maxStep, min(maxStep, step))
         shrimp.vx = 1 // 오른쪽을 바라본다
-        ride.tilt = 0.35 * sin(8 * t + ride.seed)
+        // 띠의 기울기를 따라 기울고, 살짝 흔들린다.
+        let slope = (y(lane: ride.lane, x: centerX + 6, t: t, group: group, floor: floor)
+            - y(lane: ride.lane, x: centerX - 6, t: t, group: group, floor: floor)) / 12
+        ride.tilt = max(-0.5, min(0.5, atan(slope))) * 0.9 + 0.12 * sin(7 * t + ride.seed)
     }
 }
 

@@ -81,6 +81,7 @@ namespace ShrimpBreak
         public void Draw(double t)
         {
             var front = WaveSweep.Front(group, t);
+            var begin = Math.Max(WaveSweep.Tail(group, t), stage.MinX);
             var end = Math.Min(front, stage.MaxX);
 
             using (var g = Graphics.FromImage(canvas))
@@ -88,10 +89,10 @@ namespace ShrimpBreak
                 g.Clear(Color.Transparent);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.CompositingMode = CompositingMode.SourceOver;
-                if (end > stage.MinX)
+                if (end > begin)
                 {
                     var lines = new PointF[WaveSweep.LaneCount][];
-                    for (var lane = 0; lane < WaveSweep.LaneCount; lane++) lines[lane] = Curve(lane, t, front, end);
+                    for (var lane = 0; lane < WaveSweep.LaneCount; lane++) lines[lane] = Curve(lane, t, begin, end);
 
                     // 뒤(높은 띠)부터 앞(낮은 띠) 순서로 칠한다 → 겹겹이 쌓인 물결.
                     for (var lane = WaveSweep.LaneCount - 1; lane >= 0; lane--)
@@ -100,7 +101,7 @@ namespace ShrimpBreak
                         var water = new PointF[points.Length + 2];
                         points.CopyTo(water, 0);
                         water[points.Length] = new PointF(points[points.Length - 1].X, height);
-                        water[points.Length + 1] = new PointF(0, height);
+                        water[points.Length + 1] = new PointF(points[0].X, height);
                         using (var brush = new SolidBrush(Color.FromArgb(WaterAlpha, LaneColors[lane])))
                             g.FillPolygon(brush, water);
                     }
@@ -110,14 +111,14 @@ namespace ShrimpBreak
             Present((byte)Math.Round(255 * WaveSweep.Opacity(group, t)));
         }
 
-        PointF[] Curve(int lane, double t, double front, double end)
+        PointF[] Curve(int lane, double t, double begin, double end)
         {
-            var count = Math.Max(2, (int)((end - stage.MinX) / 10) + 2);
+            var count = Math.Max(2, (int)((end - begin) / 10) + 2);
             var points = new PointF[count];
             for (var i = 0; i < count; i++)
             {
-                var x = Math.Min(end, stage.MinX + i * 10);
-                var y = WaveSweep.WaveY(lane, x, t, front, stage.Floor, size);
+                var x = Math.Min(end, begin + i * 10);
+                var y = WaveSweep.WaveY(lane, x, t, group, stage.Floor);
                 points[i] = new PointF((float)(x - stage.MinX), (float)(topY - y));
             }
             return points;

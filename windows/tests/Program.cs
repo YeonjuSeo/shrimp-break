@@ -212,8 +212,17 @@ static class Program
             var movedLeft = 0;
             var maxJump = 0.0;
             var total = WaveSweep.TotalDuration(groups);
+            var drainStart = groups.Min(WaveSweep.DrainStart);
+            double? crowdedRatio = null;
             for (var t = 0.0; t <= total; t += Dt)
             {
+                // 물이 빠져나가기 직전: 새우들이 파도 앞쪽 끝에 몰려 있지 않고 곳곳에 흩어져 타고 있어야 한다.
+                if (crowdedRatio == null && t >= drainStart)
+                {
+                    crowdedRatio = shrimps.Count(s => rides.TryGetValue(s, out var r)
+                                                      && WaveSweep.Front(r.Group, t) - (s.X + s.Size / 2) < 1.5 * s.Size)
+                                   / (double)shrimps.Count;
+                }
                 foreach (var s in shrimps)
                 {
                     if (!rides.TryGetValue(s, out var ride))
@@ -241,18 +250,30 @@ static class Program
             Check(name, $"{label}: 올라탄 뒤 왼쪽으로 끌려가지 않음", movedLeft == 0, $"{movedLeft}번");
             Check(name, $"{label}: 순간이동 없음 (한 프레임 세로 이동 < 새우 크기의 1/3)", maxJump < SizeOf(stages[0]) / 3, $"{maxJump:F0}px");
             Check(name, $"{label}: 다른 묶음(위아래 모니터)의 파도를 타지 않음", switchedGroup == 0, $"{switchedGroup}마리");
+            Console.WriteLine($"   빠져나가기 직전 파도 앞쪽 끝(새우 1.5마리 안)에 몰린 새우 비율 {crowdedRatio:P0}");
+            Check(name, $"{label}: 새우들이 파도 앞쪽 끝에 몰리지 않음 (25% 미만)", crowdedRatio < 0.25, $"{crowdedRatio:P0}");
         }
 
         var single = WaveSweep.BuildGroups(new[] { StageGeometry.FromScreen("wide", 0, 2560, 0, 1440, 1.0, 3.6) }, SizeOf)[0];
         // 앞쪽이 수직으로 끊기지 않도록: 맨 앞은 바닥 높이이고, 바로 뒤도 바닥 근처에서 완만하게 시작한다.
         var floor = single.Stages[0].Floor;
         var front = WaveSweep.Front(single, 0.8);
-        var atFront = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => Math.Abs(WaveSweep.WaveY(lane, front, 0.8, front, floor, single.Size) - floor));
-        var justBehind = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => WaveSweep.WaveY(lane, front - 0.1 * single.Size, 0.8, front, floor, single.Size) - floor);
+        var atFront = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => Math.Abs(WaveSweep.WaveY(lane, front, 0.8, single, floor) - floor));
+        var justBehind = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => WaveSweep.WaveY(lane, front - 0.1 * single.Size, 0.8, single, floor) - floor);
+        // 빠져나갈 때 뒤꼬리도 수직으로 끊기지 않고 바닥으로 내려앉아야 한다.
+        var tailTime = WaveSweep.DrainStart(single) + 0.5;
+        var tail = WaveSweep.Tail(single, tailTime);
+        var atTail = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => Math.Abs(WaveSweep.WaveY(lane, tail, tailTime, single, floor) - floor));
+        var justAhead = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => WaveSweep.WaveY(lane, tail + 0.1 * single.Size, tailTime, single, floor) - floor);
+        Console.WriteLine($"[{name}] 뒤꼬리 끝 높이 {atTail:F1}px, 뒤꼬리에서 새우 0.1마리 앞 높이 {justAhead:F1}px");
+        Check(name, "뒤꼬리 끝도 바닥 높이", atTail < 0.5, $"{atTail:F1}px");
+        Check(name, "뒤꼬리 바로 앞도 바닥 근처에서 완만하게 시작", justAhead < single.Size * 0.1, $"{justAhead:F1}px");
         Console.WriteLine($"[{name}] 앞쪽 끝 높이 {atFront:F1}px, 앞쪽에서 새우 0.1마리 뒤 높이 {justBehind:F1}px (새우 크기 {single.Size:F0}px)");
         Check(name, "앞쪽 끝은 바닥 높이 (수직으로 끊기지 않음)", atFront < 0.5, $"{atFront:F1}px");
         Check(name, "앞쪽 바로 뒤도 바닥 근처에서 완만하게 시작", justBehind < single.Size * 0.1, $"{justBehind:F1}px");
         Check(name, "끝나면 띠가 완전히 투명", WaveSweep.Opacity(single, single.Duration + WaveSweep.FadeDuration) == 0, "");
+        Check(name, "끝날 때 뒤꼬리까지 묶음 오른쪽 밖", WaveSweep.Tail(single, single.Duration) >= single.MaxX + WaveSweep.TailRampRatio * single.Size - 0.5,
+              $"{WaveSweep.Tail(single, single.Duration):F0}");
     }
 
     static void Check(string scenario, string what, bool ok, string detail)

@@ -252,6 +252,7 @@ namespace ShrimpBreak
             Size = size;
             MinX = stages.Min(stage => stage.MinX);
             MaxX = stages.Max(stage => stage.MaxX);
+            Duration = WaveSweep.EndTime(this);
         }
 
         public IReadOnlyList<StageGeometry> Stages { get; }
@@ -259,10 +260,8 @@ namespace ShrimpBreak
         public double MaxX { get; }
         /// <summary>물결 모양의 기준 크기 (모니터마다 새우 크기가 조금 달라도 물결이 끊기지 않도록 하나로).</summary>
         public double Size { get; }
-
-        /// <summary>파도 앞쪽이 묶음 왼쪽 끝 조금 앞에서 출발해, 모든 새우가 오른쪽 밖으로 나갈 때까지 걸리는 시간.</summary>
-        public double Duration => (MaxX - MinX + (WaveSweep.FrontStartRatio + WaveSweep.FrontEndRatio) * Size)
-                                  / (WaveSweep.SpeedRatio * Size);
+        /// <summary>파도가 밀려와서 물이 묶음 오른쪽 밖으로 다 빠져나갈 때까지 걸리는 시간.</summary>
+        public double Duration { get; }
 
         /// <summary>x 위치의 모니터 (묶음 바깥이면 가장 가까운 끝 모니터).</summary>
         public StageGeometry StageAt(double x)
@@ -278,8 +277,8 @@ namespace ShrimpBreak
     {
         /// <summary>올라탄 띠 (0 = 가장 낮고 앞에 있는 띠).</summary>
         public int Lane;
-        /// <summary>파도 앞쪽에서 얼마나 뒤에 붙어 가는지 (새우 크기 배수, 음수).</summary>
-        public double OffsetRatio;
+        /// <summary>올라탄 자리 (물과 함께 흘러가는 좌표). 새우 중심 x = PatternX + 물이 흘러간 거리.</summary>
+        public double PatternX;
         /// <summary>새우마다 출렁임이 다르게 보이도록 하는 위상.</summary>
         public double Seed;
         /// <summary>올라탄 파도의 모니터 묶음 (이 묶음 끝까지 쓸려 간다).</summary>
@@ -290,22 +289,30 @@ namespace ShrimpBreak
 
     /// <summary>
     /// 새우를 클릭했을 때 파도가 쓸어가는 연출 (Mac 버전 ShrimpOverlay 의 Wave 와 같은 규칙).
-    /// 좌표는 위가 + 인 좌표. 모니터 묶음(좌우로 맞닿은 모니터들)마다 파도 하나가 왼쪽 끝에서 오른쪽 끝까지
-    /// 이어서 지나간다. 물결 모양은 이어지고, 높이는 각 모니터 바닥에 붙는다.
-    /// - 길고 완만한 물결 띠 5개가 겹겹이 쌓여 출렁이고, 맨 앞쪽은 볼록하게 솟아 있다.
-    /// - 파도 앞쪽이 새우에 닿으면 새우가 띠 하나에 올라타 흔들리며 함께 쓸려 간다 (옆 모니터로도 넘어간다).
-    /// - 앞쪽이 묶음 오른쪽 밖까지 지나가면 띠가 옅어지며(FadeDuration) 끝난다.
-    /// 속도는 "초당 새우 크기 몇 배"로 정한다 → 모니터가 많아 거리가 길어도 같은 빠르기로 보인다.
+    /// 좌표는 위가 + 인 좌표. 모니터 묶음(좌우로 맞닿은 모니터들)마다 파도 하나가 이어서 지나간다.
+    /// 물결 모양은 이어지고, 높이는 각 모니터 바닥에 붙는다.
+    ///
+    /// 1) 밀려들기: 파도 앞쪽이 빠르게 왼쪽에서 오른쪽으로 덮어 온다. 물 전체도 천천히 오른쪽으로 흐른다.
+    /// 2) 올라타기: 앞쪽이 닿으면 새우는 그 자리에서 띠 위로 들어 올려져, 물과 함께 흐르며 띠의 굴곡을 따라 울렁인다.
+    /// 3) 빠져나가기: 앞쪽이 묶음 오른쪽 끝에 닿으면 물 전체가 점점 빨라지며 오른쪽으로 빠져나간다 (새우도 함께).
+    /// 앞쪽·뒤꼬리 모두 바닥으로 내려앉는 비탈이라 수직으로 끊겨 보이지 않는다.
     /// </summary>
     public static class WaveSweep
     {
-        /// <summary>파도 앞쪽이 나아가는 빠르기 (초당 새우 크기 배수). 가로 4K 한 대 ≈ 1.6초.</summary>
+        /// <summary>파도 앞쪽이 밀려드는 빠르기 (초당 새우 크기 배수).</summary>
         public const double SpeedRatio = 12.5;
+        /// <summary>물이 흐르는 빠르기 (앞쪽 빠르기 대비): 밀려드는 동안 → 빠져나갈 때.</summary>
+        public const double FlowRatioWhileFlooding = 0.3;
+        public const double FlowRatioWhileDraining = 1.8;
+        /// <summary>빠져나가기 시작할 때 물이 빨라지는 데 걸리는 시간.</summary>
+        public const double DrainRampSeconds = 0.4;
         /// <summary>앞쪽이 묶음 왼쪽 끝보다 얼마나 앞(왼쪽)에서 출발하는지 (새우 크기 배수).</summary>
         public const double FrontStartRatio = 0.5;
-        /// <summary>앞쪽이 묶음 오른쪽 끝을 얼마나 지나서 멈추는지 (새우 크기 배수). 비탈 뒤에 탄 새우까지 다 빠져나가도록.</summary>
-        public const double FrontEndRatio = 4.5;
-        public const double FadeDuration = 0.4;
+        /// <summary>뒤꼬리가 묶음 왼쪽 끝보다 얼마나 뒤에서 출발하는지, 뒤꼬리 비탈 길이 (새우 크기 배수).</summary>
+        public const double TailStartRatio = 3;
+        public const double TailRampRatio = 3;
+        /// <summary>물이 다 빠져나간 뒤 남은 띠를 지우는 시간 (이미 화면 밖이라 짧게).</summary>
+        public const double FadeDuration = 0.1;
         /// <summary>겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).</summary>
         public const int LaneCount = 5;
 
@@ -366,36 +373,78 @@ namespace ShrimpBreak
         /// <summary>모든 파도가 끝나는 시각.</summary>
         public static double TotalDuration(IEnumerable<WaveGroup> groups) => groups.Max(group => group.Duration) + FadeDuration;
 
-        /// <summary>t 초일 때 파도 앞쪽의 x.</summary>
+        static double FrontSpeed(WaveGroup group) => SpeedRatio * group.Size;
+
+        /// <summary>앞쪽이 묶음 오른쪽 끝에 닿아 물이 빠져나가기 시작하는 시각.</summary>
+        public static double DrainStart(WaveGroup group)
+            => (group.MaxX - group.MinX + FrontStartRatio * group.Size) / FrontSpeed(group);
+
+        /// <summary>t 초까지 물이 오른쪽으로 흘러간 거리. 처음엔 천천히, 빠져나갈 때 빨라진다.</summary>
+        public static double Shift(WaveGroup group, double t)
+        {
+            t = Math.Max(0, t);
+            var t0 = DrainStart(group);
+            var t1 = t0 + DrainRampSeconds;
+            var ramped = t <= t0 ? 0 : t <= t1 ? (t - t0) * (t - t0) / (2 * DrainRampSeconds) : DrainRampSeconds / 2 + (t - t1);
+            return FrontSpeed(group) * (FlowRatioWhileFlooding * t + (FlowRatioWhileDraining - FlowRatioWhileFlooding) * ramped);
+        }
+
+        /// <summary>t 초일 때 파도 앞쪽의 x. 빠져나갈 때 물이 더 빨라지면 앞쪽도 물과 함께 간다.</summary>
         public static double Front(WaveGroup group, double t)
-            => Math.Min(group.MaxX + FrontEndRatio * group.Size,
-                        group.MinX - FrontStartRatio * group.Size + SpeedRatio * group.Size * Math.Max(0, t));
+        {
+            var start = group.MinX - FrontStartRatio * group.Size;
+            var flooding = start + FrontSpeed(group) * Math.Max(0, t);
+            var t0 = DrainStart(group);
+            if (t <= t0) return flooding;
+            var withWater = start + FrontSpeed(group) * t0 + Shift(group, t) - Shift(group, t0);
+            return Math.Max(flooding, withWater);
+        }
+
+        /// <summary>t 초일 때 파도 뒤꼬리의 x (물과 함께 흘러간다).</summary>
+        public static double Tail(WaveGroup group, double t) => group.MinX - TailStartRatio * group.Size + Shift(group, t);
+
+        /// <summary>뒤꼬리 비탈까지 묶음 오른쪽 밖으로 다 나가는 시각 (Shift 를 거꾸로 푼 값).</summary>
+        public static double EndTime(WaveGroup group)
+        {
+            var distance = group.MaxX - group.MinX + (TailStartRatio + TailRampRatio) * group.Size;
+            var t1 = DrainStart(group) + DrainRampSeconds;
+            // t > t1 구간: Shift = V(a·t + (b-a)(ramp/2 + t - t1)) = distance 를 t 에 대해 푼다.
+            return (distance / FrontSpeed(group) + (FlowRatioWhileDraining - FlowRatioWhileFlooding) * (t1 - DrainRampSeconds / 2))
+                   / FlowRatioWhileDraining;
+        }
 
         /// <summary>
-        /// 띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준). x 가 앞쪽보다 뒤(왼쪽)일 때만 의미가 있다.
-        /// 앞쪽에서는 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
+        /// 띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준). 물결 모양은 물과 함께 흘러간다.
+        /// 앞쪽·뒤꼬리에서는 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
         /// </summary>
-        public static double WaveY(int lane, double x, double t, double front, double floor, double size)
+        public static double WaveY(int lane, double x, double t, WaveGroup group, double floor)
         {
-            var behind = Math.Max(0, front - x);
+            var size = group.Size;
+            var front = Front(group, t);
+            var tail = Tail(group, t);
+            if (x > front || x < tail) return floor;
+
+            var behind = front - x;
             var ramp = LaneRamp[lane] * size;
             var crestOffset = (behind - 0.9 * ramp) / (CrestWidth * size);
             var amplitude = LaneAmplitude[lane] * size;
             var wavelength = LaneWavelength[lane] * size;
+            var flowing = x - Shift(group, t); // 물과 함께 흘러가는 좌표
             var height = LaneBase[lane] * size
-                         + amplitude * Math.Sin(2 * Math.PI * x / wavelength - LaneSpeed[lane] * t + LanePhase[lane])
+                         + amplitude * Math.Sin(2 * Math.PI * flowing / wavelength - LaneSpeed[lane] * t + LanePhase[lane])
                          + amplitude * RippleAmplitudeRatio
-                           * Math.Sin(2 * Math.PI * x / (wavelength * RippleWavelengthRatio) + 1.6 * LaneSpeed[lane] * t + 2 * LanePhase[lane])
+                           * Math.Sin(2 * Math.PI * flowing / (wavelength * RippleWavelengthRatio) + 1.6 * LaneSpeed[lane] * t + 2 * LanePhase[lane])
                          + LaneCrest[lane] * size * Math.Exp(-crestOffset * crestOffset);
-            var progress = Math.Min(1, behind / ramp);
-            var envelope = progress * progress * (3 - 2 * progress); // smoothstep: 맨 앞 0 → 비탈 끝 1
-            return floor + height * envelope;
+            return floor + height * SmoothStep(behind / ramp) * SmoothStep((x - tail) / (TailRampRatio * size));
         }
 
-        /// <summary>새우가 앞쪽에서 얼마나 뒤에 타는지 (새우 크기 배수, 음수). 띠의 비탈 위 마루 근처.</summary>
-        static double RideOffsetRatio(int lane, Random random) => -LaneRamp[lane] * (0.75 + 0.35 * random.NextDouble());
+        static double SmoothStep(double value)
+        {
+            var p = Math.Min(1, Math.Max(0, value));
+            return p * p * (3 - 2 * p);
+        }
 
-        /// <summary>끝나갈 때 띠의 불투명도 (1 → 0). 묶음마다 자기 파도가 다 지나간 뒤 옅어진다.</summary>
+        /// <summary>끝나갈 때 띠의 불투명도 (1 → 0). 이미 화면 밖이라 짧게.</summary>
         public static double Opacity(WaveGroup group, double t)
         {
             if (t <= group.Duration) return 1;
@@ -403,51 +452,49 @@ namespace ShrimpBreak
             return 1 - (t - group.Duration) / FadeDuration;
         }
 
-        /// <summary>파도 앞쪽이 새우에 닿았으면 지금 높이에 가장 가까운 띠에 올라태운다. 올라탔으면 true.</summary>
+        /// <summary>파도 앞쪽이 새우에 닿았으면 그 자리에서 띠에 올라태운다. 올라탔으면 true.</summary>
         public static bool TryPickUp(ShrimpBody shrimp, WaveGroup group, double t, Random random, out WaveRide ride)
         {
             ride = null;
-            var front = Front(group, t);
-            if (front < shrimp.X + shrimp.Size * 0.3) return false;
+            if (Front(group, t) < shrimp.X + shrimp.Size * 0.3) return false;
             var centerX = shrimp.X + shrimp.Size / 2;
-            var floor = group.StageAt(centerX).Floor;
-            var lane = 0;
-            var best = double.MaxValue;
-            for (var i = 0; i < LaneCount; i++)
-            {
-                var gap = Math.Abs(WaveY(i, centerX, t, front, floor, group.Size) - shrimp.Y);
-                if (gap < best) { best = gap; lane = i; }
-            }
+            var heightAboveFloor = shrimp.Y - group.StageAt(centerX).Floor;
+            // 지금 높이에 가장 가까운 띠 (높이 떠 있던 새우는 위쪽 띠에)
+            var lane = Enumerable.Range(0, LaneCount).OrderBy(i => Math.Abs(LaneBase[i] * group.Size - heightAboveFloor)).First();
             ride = new WaveRide
             {
                 Lane = lane,
-                OffsetRatio = RideOffsetRatio(lane, random),
+                PatternX = centerX - Shift(group, t),
                 Seed = random.NextDouble() * 2 * Math.PI,
                 Group = group,
             };
             return true;
         }
 
-        /// <summary>올라탄 새우를 파도와 함께 옮긴다. 위아래로 출렁이고 좌우로 기우뚱한다. 옆 모니터로 넘어가면 그 바닥을 따른다.</summary>
+        /// <summary>
+        /// 올라탄 새우를 물과 함께 흘려보낸다. 올라탄 자리를 지키며 띠의 굴곡을 따라 오르내리고 기운다.
+        /// 옆 모니터로 넘어가면 그 바닥을 따른다.
+        /// </summary>
         public static void Ride(ShrimpBody shrimp, WaveRide ride, double t, double dt)
         {
             var size = shrimp.Size;
             var group = ride.Group;
-            var front = Front(group, t);
-            // 앞쪽에 밀려 오른쪽으로만 간다 (뒤로 끌려가지 않도록).
-            shrimp.X = Math.Max(shrimp.X, front + ride.OffsetRatio * size - size / 2);
-            var centerX = shrimp.X + size / 2;
+            // 물과 함께 오른쪽으로만 간다 (뒤로 끌려가지 않도록).
+            var centerX = Math.Max(shrimp.X + size / 2, ride.PatternX + Shift(group, t));
+            shrimp.X = centerX - size / 2;
             var stage = group.StageAt(centerX);
             shrimp.Home = stage;
-            var bob = 0.06 * size * Math.Sin(11 * t + ride.Seed);
-            var target = WaveY(ride.Lane, centerX, t, front, stage.Floor, group.Size) - 0.25 * size + bob;
+            var bob = 0.04 * size * Math.Sin(9 * t + ride.Seed);
+            var target = WaveY(ride.Lane, centerX, t, group, stage.Floor) - 0.25 * size + bob;
             // 순간이동 없이 따라가되, 높이 떠 있던 새우·바닥 높이가 다른 모니터로 넘어간 새우도
             // 파도 위로 내려앉는 듯 보이도록 세로 속도에 상한을 둔다.
             var step = (target - shrimp.Y) * Math.Min(1, dt * 10);
             var maxStep = MaxSettleSpeedRatio * size * dt;
             shrimp.Y += Math.Max(-maxStep, Math.Min(maxStep, step));
             shrimp.Vx = 1; // 오른쪽을 바라본다
-            ride.Tilt = 0.35 * Math.Sin(8 * t + ride.Seed);
+            // 띠의 기울기를 따라 기울고, 살짝 흔들린다.
+            var slope = (WaveY(ride.Lane, centerX + 6, t, group, stage.Floor) - WaveY(ride.Lane, centerX - 6, t, group, stage.Floor)) / 12;
+            ride.Tilt = Math.Max(-0.5, Math.Min(0.5, Math.Atan(slope))) * 0.9 + 0.12 * Math.Sin(7 * t + ride.Seed);
         }
     }
 }
