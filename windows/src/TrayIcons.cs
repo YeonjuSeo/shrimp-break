@@ -8,7 +8,7 @@ using Microsoft.Win32;
 namespace ShrimpBreak
 {
     /// <summary>
-    /// 작업 표시줄 알림 영역(트레이) 아이콘. 앉은 사람 / 선 사람 실루엣을
+    /// 작업 표시줄 알림 영역(트레이) 아이콘. 앉은 사람 / 선 사람 / 움직이는 사람 실루엣을
     /// 작업 표시줄 색(밝음·어두움)에 맞춰 흰색 또는 검정으로 칠한다.
     /// 상태 표시: 알림 중 = 빨간 점, 일시정지·자리 비움 = 흐리게.
     /// </summary>
@@ -18,8 +18,9 @@ namespace ShrimpBreak
 
         readonly Image sitting = TrimTransparent(Resources.LoadImage("sitting.png"));
         readonly Image standing = TrimTransparent(Resources.LoadImage("standing.png"));
+        readonly Image moving = TrimTransparent(Resources.LoadImage("moving.png"));
         /// <summary>새 아이콘을 만들어 돌려준다. 돌려받은 쪽이 다 쓰면 Dispose 한다.</summary>
-        public Icon Make(Posture posture, Badge badge)
+        public Icon Make(Routine routine, Badge badge)
         {
             var side = SystemInformation.SmallIconSize.Width; // 화면 배율에 맞는 트레이 아이콘 크기
             using (var bitmap = new Bitmap(side, side, PixelFormat.Format32bppArgb))
@@ -31,7 +32,7 @@ namespace ShrimpBreak
                     g.SmoothingMode = SmoothingMode.AntiAlias;
                     g.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
-                    var silhouette = posture == Posture.Sitting ? sitting : standing;
+                    var silhouette = routine == Routine.Sitting ? sitting : routine == Routine.Standing ? standing : moving;
                     var tint = IsTaskbarLight() ? Color.Black : Color.White;
                     var alpha = badge == Badge.Dimmed ? 0.45f : 1f;
                     DrawTinted(g, silhouette, new Rectangle(0, 0, side, side), tint, alpha);
@@ -55,6 +56,7 @@ namespace ShrimpBreak
         {
             sitting.Dispose();
             standing.Dispose();
+            moving.Dispose();
         }
 
         /// <summary>검정 실루엣(투명 배경)을 원하는 색으로, 비율을 유지해 가운데에 그린다.</summary>

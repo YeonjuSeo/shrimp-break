@@ -21,9 +21,9 @@ namespace ShrimpBreak
     /// </summary>
     sealed class Telemetry
     {
-        public enum QuickAction { Restart, Sit, Stand }
+        public enum QuickAction { Restart, Sit, Stand, Move }
 
-        enum SegmentKind { Sat, Stood, Paused }
+        enum SegmentKind { Sat, Stood, Moved, Paused }
 
         const string SharedKey = "shrimp-v1";
         const int MaxQueuedEvents = 200;
@@ -192,10 +192,12 @@ namespace ShrimpBreak
                 lastPhase = phase;
             }
 
-            // 알림 중에는 Posture 가 이미 다음 자세로 넘어가 있지만, 사용자는 아직 이전 자세다.
-            var posture = phase == Phase.Alerting ? Toggled(scheduler.Posture) : scheduler.Posture;
+            // 알림 중에는 다음 루틴으로 넘어가 있지만, 사용자는 아직 이전 루틴을 하고 있다 (Activity).
             SegmentKind? kind = null;
-            if (phase == Phase.Counting || phase == Phase.Alerting) kind = posture == Posture.Sitting ? SegmentKind.Sat : SegmentKind.Stood;
+            if (phase == Phase.Counting || phase == Phase.Alerting)
+                kind = scheduler.Activity == Routine.Sitting ? SegmentKind.Sat
+                     : scheduler.Activity == Routine.Standing ? SegmentKind.Stood
+                     : SegmentKind.Moved;
             else if (phase == Phase.Paused) kind = SegmentKind.Paused;
             if (kind != segment)
             {
@@ -242,7 +244,8 @@ namespace ShrimpBreak
             RollOverIfNeeded();
             if (action == QuickAction.Restart) day.QuickRestart++;
             else if (action == QuickAction.Sit) day.QuickSit++;
-            else day.QuickStand++;
+            else if (action == QuickAction.Stand) day.QuickStand++;
+            else day.QuickMove++;
             Save();
         }
 
@@ -333,6 +336,7 @@ namespace ShrimpBreak
             {
                 case SegmentKind.Sat: day.SatSeconds += seconds; break;
                 case SegmentKind.Stood: day.StoodSeconds += seconds; break;
+                case SegmentKind.Moved: day.MovedSeconds += seconds; break;
                 case SegmentKind.Paused: day.PausedSeconds += seconds; break;
             }
             segment = null;
@@ -340,11 +344,12 @@ namespace ShrimpBreak
 
         Event DailyEvent(DayStats stats, SegmentKind? openKind, double? openSeconds, int errors)
         {
-            double sat = stats.SatSeconds, stood = stats.StoodSeconds, paused = stats.PausedSeconds;
+            double sat = stats.SatSeconds, stood = stats.StoodSeconds, moved = stats.MovedSeconds, paused = stats.PausedSeconds;
             if (openKind.HasValue && openSeconds.HasValue)
             {
                 if (openKind == SegmentKind.Sat) sat += openSeconds.Value;
                 else if (openKind == SegmentKind.Stood) stood += openSeconds.Value;
+                else if (openKind == SegmentKind.Moved) moved += openSeconds.Value;
                 else paused += openSeconds.Value;
             }
             double acknowledged = stats.Acknowledged;
@@ -360,12 +365,14 @@ namespace ShrimpBreak
                 .With("max_reaction_sec", Math.Round(stats.MaxReactionSeconds))
                 .With("sat_minutes", Math.Round(sat / 60))
                 .With("stood_minutes", Math.Round(stood / 60))
+                .With("moved_minutes", Math.Round(moved / 60))
                 .With("pauses", stats.Pauses)
                 .With("paused_minutes", Math.Round(paused / 60))
                 .With("away_count", stats.AwayCount)
                 .With("quick_restart", stats.QuickRestart)
                 .With("quick_sit", stats.QuickSit)
                 .With("quick_stand", stats.QuickStand)
+                .With("quick_move", stats.QuickMove)
                 .With("errors", errors);
             for (var hour = 0; hour < 24; hour++) e.With($"ack_h{hour:00}", stats.AckHours[hour]);
             return e;
@@ -412,7 +419,6 @@ namespace ShrimpBreak
             return e;
         }
 
-        static Posture Toggled(Posture posture) => posture == Posture.Sitting ? Posture.Standing : Posture.Sitting;
 
         static string Today() => DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
@@ -584,25 +590,25 @@ namespace ShrimpBreak
 
         sealed class SettingsSnapshot
         {
-            public bool Separate;
-            public int Interval, Sitting, Standing, Away, Escalation;
+            /// <summary>저장 파일 맨 앞 표시. 예전 버전(타이머 한 개/두 개) 파일은 읽지 않고 처음 한 번은 비교 없이 새로 저장한다.</summary>
+            const string FormatTag = "v2";
+
+            public int Sitting, Standing, Moving, Away, Escalation;
 
             public static SettingsSnapshot Current() => new SettingsSnapshot
             {
-                Separate = Settings.UsesSeparatePostureTimers,
-                Interval = Settings.IntervalMinutes,
                 Sitting = Settings.SittingMinutes,
                 Standing = Settings.StandingMinutes,
+                Moving = Settings.MovingMinutes,
                 Away = Settings.AwayThresholdMinutes,
                 Escalation = Settings.EscalationSeconds,
             };
 
             public Dictionary<string, object> Fields() => new Dictionary<string, object>
             {
-                ["separate_timers"] = Separate,
-                ["interval_minutes"] = Interval,
                 ["sitting_minutes"] = Sitting,
                 ["standing_minutes"] = Standing,
+                ["moving_minutes"] = Moving,
                 ["away_threshold"] = Away,
                 ["escalation_seconds"] = Escalation,
             };
@@ -616,10 +622,9 @@ namespace ShrimpBreak
                     var b = Convert.ToString(to, CultureInfo.InvariantCulture).ToLowerInvariant();
                     if (a != b) result.Add((field, a, b));
                 }
-                Add("separate_timers", previous.Separate, Separate);
-                Add("interval_minutes", previous.Interval, Interval);
                 Add("sitting_minutes", previous.Sitting, Sitting);
                 Add("standing_minutes", previous.Standing, Standing);
+                Add("moving_minutes", previous.Moving, Moving);
                 Add("away_threshold", previous.Away, Away);
                 Add("escalation_seconds", previous.Escalation, Escalation);
                 return result;
@@ -630,7 +635,7 @@ namespace ShrimpBreak
                 try
                 {
                     Directory.CreateDirectory(Folder);
-                    File.WriteAllText(path, $"{Separate}|{Interval}|{Sitting}|{Standing}|{Away}|{Escalation}");
+                    File.WriteAllText(path, $"{FormatTag}|{Sitting}|{Standing}|{Moving}|{Away}|{Escalation}");
                 }
                 catch
                 {
@@ -643,15 +648,15 @@ namespace ShrimpBreak
                 try
                 {
                     var parts = File.ReadAllText(path).Split('|');
+                    if (parts[0] != FormatTag) return null;
+                    int Part(int index) => int.Parse(parts[index], CultureInfo.InvariantCulture);
                     return new SettingsSnapshot
                     {
-                        Separate = bool.Parse(parts[0]),
-                        Interval = int.Parse(parts[1], CultureInfo.InvariantCulture),
-                        Sitting = int.Parse(parts[2], CultureInfo.InvariantCulture),
-                        Standing = int.Parse(parts[3], CultureInfo.InvariantCulture),
-                        Away = int.Parse(parts[4], CultureInfo.InvariantCulture),
-                        // 증식 속도 설정이 생기기 전에 저장된 파일에는 6번째 값이 없다 → 기본값 60
-                        Escalation = parts.Length > 5 ? int.Parse(parts[5], CultureInfo.InvariantCulture) : Settings.MaxEscalationSeconds,
+                        Sitting = Part(1),
+                        Standing = Part(2),
+                        Moving = Part(3),
+                        Away = Part(4),
+                        Escalation = Part(5),
                     };
                 }
                 catch
@@ -668,8 +673,8 @@ namespace ShrimpBreak
 
             public string Date;
             public int Alerts, Acknowledged, ShrimpClicks, TempuraClicks, ShrimpsAtClickSum, MaxShrimps;
-            public double ReactionSecondsSum, MaxReactionSeconds, SatSeconds, StoodSeconds, PausedSeconds;
-            public int Pauses, AwayCount, QuickRestart, QuickSit, QuickStand;
+            public double ReactionSecondsSum, MaxReactionSeconds, SatSeconds, StoodSeconds, MovedSeconds, PausedSeconds;
+            public int Pauses, AwayCount, QuickRestart, QuickSit, QuickStand, QuickMove;
             /// <summary>시간(0~23)별 자세 바꾼 횟수.</summary>
             public int[] AckHours = new int[24];
 
@@ -684,9 +689,10 @@ namespace ShrimpBreak
                     "TempuraClicks=" + TempuraClicks, "ShrimpsAtClickSum=" + ShrimpsAtClickSum, "MaxShrimps=" + MaxShrimps,
                     "ReactionSecondsSum=" + ReactionSecondsSum.ToString(c), "MaxReactionSeconds=" + MaxReactionSeconds.ToString(c),
                     "SatSeconds=" + SatSeconds.ToString(c), "StoodSeconds=" + StoodSeconds.ToString(c),
+                    "MovedSeconds=" + MovedSeconds.ToString(c),
                     "PausedSeconds=" + PausedSeconds.ToString(c),
                     "Pauses=" + Pauses, "AwayCount=" + AwayCount,
-                    "QuickRestart=" + QuickRestart, "QuickSit=" + QuickSit, "QuickStand=" + QuickStand,
+                    "QuickRestart=" + QuickRestart, "QuickSit=" + QuickSit, "QuickStand=" + QuickStand, "QuickMove=" + QuickMove,
                     "AckHours=" + string.Join(",", AckHours),
                 });
             }
@@ -708,9 +714,11 @@ namespace ShrimpBreak
                         Alerts = I("Alerts"), Acknowledged = I("Acknowledged"), ShrimpClicks = I("ShrimpClicks"),
                         TempuraClicks = I("TempuraClicks"), ShrimpsAtClickSum = I("ShrimpsAtClickSum"), MaxShrimps = I("MaxShrimps"),
                         ReactionSecondsSum = D("ReactionSecondsSum"), MaxReactionSeconds = D("MaxReactionSeconds"),
-                        SatSeconds = D("SatSeconds"), StoodSeconds = D("StoodSeconds"), PausedSeconds = D("PausedSeconds"),
+                        SatSeconds = D("SatSeconds"), StoodSeconds = D("StoodSeconds"), MovedSeconds = D("MovedSeconds"),
+                        PausedSeconds = D("PausedSeconds"),
                         Pauses = I("Pauses"), AwayCount = I("AwayCount"),
                         QuickRestart = I("QuickRestart"), QuickSit = I("QuickSit"), QuickStand = I("QuickStand"),
+                        QuickMove = I("QuickMove"),
                     };
                     if (map.TryGetValue("AckHours", out var hours))
                     {

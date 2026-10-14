@@ -7,35 +7,59 @@ enum Settings {
 
     static let presetIntervals = [10, 20, 30, 60]
     static let awayPresets = [3, 5, 10]
+    /// 루틴 시간으로 입력할 수 있는 범위(분). 0 = 그 루틴은 건너뛴다.
+    static let routineMinutesRange = 0...480
 
-    /// 알림 간격(분). 타이머 한 개 모드에서 앉음·섬 모두에 쓴다. 기본 30분.
-    static var intervalMinutes: Int {
-        get { minutes(forKey: "intervalMinutes", fallback: 30) }
-        set { defaults.set(newValue, forKey: "intervalMinutes") }
-    }
-
-    /// true 면 앉아 있는 시간·서 있는 시간을 따로 쓴다 (타이머 두 개 모드).
-    static var usesSeparatePostureTimers: Bool {
-        get { defaults.bool(forKey: "usesSeparatePostureTimers") }
-        set { defaults.set(newValue, forKey: "usesSeparatePostureTimers") }
-    }
-
-    /// 타이머 두 개 모드의 앉아 있는 시간(분).
+    /// 앉아 있는 시간(분). 기본 30분.
     static var sittingMinutes: Int {
-        get { minutes(forKey: "sittingMinutes", fallback: intervalMinutes) }
+        get { minutes(forKey: "sittingMinutes", fallback: 30) }
         set { defaults.set(newValue, forKey: "sittingMinutes") }
     }
 
-    /// 타이머 두 개 모드의 서 있는 시간(분).
+    /// 서 있는 시간(분). 기본 30분.
     static var standingMinutes: Int {
-        get { minutes(forKey: "standingMinutes", fallback: intervalMinutes) }
+        get { minutes(forKey: "standingMinutes", fallback: 30) }
         set { defaults.set(newValue, forKey: "standingMinutes") }
     }
 
-    /// 지금 모드에서 해당 자세 차례의 길이(분).
-    static func minutes(for posture: BreakScheduler.Posture) -> Int {
-        guard usesSeparatePostureTimers else { return intervalMinutes }
-        return posture == .sitting ? sittingMinutes : standingMinutes
+    /// 움직이는 시간(분). 기본 0분(건너뜀).
+    static var movingMinutes: Int {
+        get { minutes(forKey: "movingMinutes", fallback: 0) }
+        set { defaults.set(newValue, forKey: "movingMinutes") }
+    }
+
+    /// 루틴 차례의 길이(분). 0 이면 그 루틴은 건너뛴다.
+    static func minutes(for routine: BreakScheduler.Routine) -> Int {
+        switch routine {
+        case .sitting: return sittingMinutes
+        case .standing: return standingMinutes
+        case .moving: return movingMinutes
+        }
+    }
+
+    static func setMinutes(_ minutes: Int, for routine: BreakScheduler.Routine) {
+        switch routine {
+        case .sitting: sittingMinutes = minutes
+        case .standing: standingMinutes = minutes
+        case .moving: movingMinutes = minutes
+        }
+    }
+
+    /// 예전 설정(타이머 한 개 / 앉기·서기 따로)을 앉기·서기·움직이기 시간으로 옮긴다. 처음 한 번만.
+    /// - 타이머 한 개였으면 그 간격을 앉기·서기 모두에, 따로였으면 각자 값을 그대로. 움직이기는 0(건너뜀).
+    static func migrateIfNeeded() {
+        guard defaults.object(forKey: "movingMinutes") == nil else { return }
+        let interval = minutes(forKey: "intervalMinutes", fallback: 30)
+        if !defaults.bool(forKey: "usesSeparatePostureTimers") {
+            sittingMinutes = interval
+            standingMinutes = interval
+        } else {
+            sittingMinutes = max(1, minutes(forKey: "sittingMinutes", fallback: interval))
+            standingMinutes = max(1, minutes(forKey: "standingMinutes", fallback: interval))
+        }
+        movingMinutes = 0
+        defaults.removeObject(forKey: "intervalMinutes")
+        defaults.removeObject(forKey: "usesSeparatePostureTimers")
     }
 
     /// 새우를 클릭하지 않으면 몇 초마다 한 마리씩 늘어나는지. 3 ~ 60초, 기본 60초.
@@ -57,8 +81,9 @@ enum Settings {
         set { defaults.set(newValue, forKey: "awayThresholdMinutes") }
     }
 
+    /// 저장된 값이 없을 때만 fallback (0 은 "건너뜀"이라는 저장된 값이다).
     private static func minutes(forKey key: String, fallback: Int) -> Int {
-        let value = defaults.integer(forKey: key)
-        return value > 0 ? value : fallback
+        guard defaults.object(forKey: key) != nil else { return fallback }
+        return min(max(defaults.integer(forKey: key), routineMinutesRange.lowerBound), routineMinutesRange.upperBound)
     }
 }

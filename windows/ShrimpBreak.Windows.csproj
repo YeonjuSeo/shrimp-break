@@ -45,6 +45,7 @@
     <EmbeddedResource Include="../Resources/tempura.png" LogicalName="tempura.png" />
     <EmbeddedResource Include="../assets-src/menubar-sitting-original.png" LogicalName="sitting.png" />
     <EmbeddedResource Include="../assets-src/menubar-standing-original.png" LogicalName="standing.png" />
+    <EmbeddedResource Include="../assets-src/menubar-moving-original.png" LogicalName="moving.png" />
     <!-- 익명 통계를 받을 구글 시트(Apps Script 웹 앱) 주소. 파일이 없으면 통계 기능 전체가 꺼진 빌드가 된다. -->
     <EmbeddedResource Include="../telemetry/endpoint.txt" LogicalName="endpoint.txt" Condition="Exists('../telemetry/endpoint.txt')" />
   </ItemGroup>

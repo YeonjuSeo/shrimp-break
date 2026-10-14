@@ -38,7 +38,7 @@ if [ -s "$ROOT/telemetry/endpoint.txt" ]; then
   echo "▶ 익명 통계 주소 포함"
 fi
 cp "$ROOT/Resources/shrimp.png" "$ROOT/Resources/tempura.png" \
-   "$ROOT"/Resources/MenuBarSitting*.png "$ROOT"/Resources/MenuBarStanding*.png "$APP/Contents/Resources/"
+   "$ROOT"/Resources/MenuBarSitting*.png "$ROOT"/Resources/MenuBarStanding*.png "$ROOT"/Resources/MenuBarMoving*.png "$APP/Contents/Resources/"
 
 echo "▶ app icon"
 ICONSET="$(mktemp -d)/AppIcon.iconset"

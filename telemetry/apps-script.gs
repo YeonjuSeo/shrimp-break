@@ -3,7 +3,7 @@
  *
  * 앱이 보낸 이벤트를 이 스프레드시트의 탭 3개에 기록한다.
  *   install  : 처음 동의했을 때 한 줄
- *   settings : 타이머·자리 비움 설정을 바꿀 때마다 한 줄 (이전 값 → 새 값)
+ *   settings : 루틴 시간·자리 비움 설정을 바꿀 때마다 한 줄 (이전 값 → 새 값)
  *   daily    : 한 사람의 하루 요약 한 줄 (같은 날 다시 오면 그 줄을 덮어쓴다)
  *   consent  : 통계 보내기를 켜고 끈 기록 (처음 선택 + 메뉴에서 바꾼 것).
  *              "안 보내기"는 고유 ID 없이 한 번만 온다 → 누가 거절했는지는 알 수 없고 비율만 본다.
@@ -20,7 +20,8 @@ const INSTALL_COLUMNS = [
   'received_at', 'id', 'date', 'os', 'os_version', 'app_version', 'build', 'locale', 'monitors', 'max_scale',
   'separate_timers', 'interval_minutes', 'sitting_minutes', 'standing_minutes', 'away_threshold',
   // 새 칸은 이미 만들어진 시트와 열 순서가 어긋나지 않도록 항상 맨 끝에 덧붙인다.
-  'escalation_seconds',
+  // separate_timers·interval_minutes 는 움직이기 루틴이 생긴 버전부터 오지 않는다 (예전 기록 보존용으로 남겨 둔 열).
+  'escalation_seconds', 'moving_minutes',
 ];
 
 const CONSENT_COLUMNS = [
@@ -41,7 +42,8 @@ const DAILY_COLUMNS = [
   'away_count', 'quick_restart', 'quick_sit', 'quick_stand', 'errors',
   ...HOUR_COLUMNS,
   // 새 칸은 이미 만들어진 시트와 열 순서가 어긋나지 않도록 항상 맨 끝에 덧붙인다.
-  'escalation_seconds',
+  // separate_timers·interval_minutes 는 움직이기 루틴이 생긴 버전부터 오지 않는다 (예전 기록 보존용으로 남겨 둔 열).
+  'escalation_seconds', 'moving_minutes', 'moved_minutes', 'quick_move',
 ];
 
 // 숫자처럼 보여도 글자로 남겨야 하는 열 (예: 26.6 이 숫자로 바뀌지 않도록)
@@ -197,11 +199,12 @@ function buildDashboard(book) {
     ['클릭한 새우튀김', `=SUMIFS(${d('tempura_clicks')},${release})`],
     ['하루 평균 서 있던 시간 (분)', `=IFERROR(AVERAGEIFS(${d('stood_minutes')},${release},${acked}),0)`],
     ['하루 평균 앉아 있던 시간 (분)', `=IFERROR(AVERAGEIFS(${d('sat_minutes')},${release},${acked}),0)`],
+    ['하루 평균 움직인 시간 (분)', `=IFERROR(AVERAGEIFS(${d('moved_minutes')},${release},${acked},${d('moving_minutes')},">0"),0)`],
     ['', ''],
     ['설정', ''],
-    ['앉기·서기 따로 설정 쓰는 비율', `=IFERROR(COUNTIFS(${d('separate_timers')},TRUE,${release})/COUNTIFS(${release}),0)`],
+    ['움직이기 루틴 켠 비율 (움직이기 생긴 뒤)', `=IFERROR(COUNTIFS(${d('moving_minutes')},">0",${release})/COUNTIFS(${d('moving_minutes')},">=0",${release}),0)`],
     ['일시정지 사용 (총 횟수)', `=SUMIFS(${d('pauses')},${release})`],
-    ['바로 시작·초기화 사용 (총 횟수)', `=SUMIFS(${d('quick_restart')},${release})+SUMIFS(${d('quick_sit')},${release})+SUMIFS(${d('quick_stand')},${release})`],
+    ['바로 시작·초기화 사용 (총 횟수)', `=SUMIFS(${d('quick_restart')},${release})+SUMIFS(${d('quick_sit')},${release})+SUMIFS(${d('quick_stand')},${release})+SUMIFS(${d('quick_move')},${release})`],
     ['자리 비움 발생 (총 횟수)', `=SUMIFS(${d('away_count')},${release})`],
     ['여러 모니터 사용 비율', `=IFERROR(COUNTIFS(${d('monitors')},">1",${release})/COUNTIFS(${release}),0)`],
     ['오류 (Windows, 총 횟수)', `=SUMIFS(${d('errors')},${release})`],
@@ -209,18 +212,14 @@ function buildDashboard(book) {
   ];
   sheet.getRange(1, 1, rows.length, 2).setValues(rows);
 
-  // 인기 알림 간격 (사람-일 기준)
+  // 인기 루틴 시간 조합 (사람-일 기준). 움직이기 시간이 있는 줄 = 움직이기 루틴이 생긴 뒤 기록만.
   const top = rows.length + 2;
-  sheet.getRange(top, 1).setValue('인기 알림 간격 (타이머 한 개 모드, 사람-일 기준)');
+  sheet.getRange(top, 1).setValue('인기 앉기/서기/움직이기 조합 (움직이기 생긴 뒤, 사람-일 기준)');
   sheet.getRange(top + 1, 1).setFormula(
-    `=IFERROR(QUERY({${d2('interval_minutes')},${d2('build')},${d2('separate_timers')}},` +
-    `"select Col1, count(Col1) where Col2='release' and Col3=false group by Col1 order by count(Col1) desc limit 5 ` +
-    `label Col1 '간격(분)', count(Col1) '횟수'",0),"아직 없음")`);
-  sheet.getRange(top, 4).setValue('인기 앉기/서기 조합 (사람-일 기준)');
-  sheet.getRange(top + 1, 4).setFormula(
-    `=IFERROR(QUERY({${d2('sitting_minutes')},${d2('standing_minutes')},${d2('build')},${d2('separate_timers')}},` +
-    `"select Col1, Col2, count(Col1) where Col3='release' and Col4=true group by Col1, Col2 order by count(Col1) desc limit 5 ` +
-    `label Col1 '앉기(분)', Col2 '서기(분)', count(Col1) '횟수'",0),"아직 없음")`);
+    `=IFERROR(QUERY({${d2('sitting_minutes')},${d2('standing_minutes')},${d2('moving_minutes')},${d2('build')}},` +
+    `"select Col1, Col2, Col3, count(Col1) where Col4='release' and Col3 is not null ` +
+    `group by Col1, Col2, Col3 order by count(Col1) desc limit 5 ` +
+    `label Col1 '앉기(분)', Col2 '서기(분)', Col3 '움직이기(분)', count(Col1) '횟수'",0),"아직 없음")`);
 
   // 시간대별 자세 바꾼 횟수
   const hoursRow = top + 9;
@@ -232,11 +231,10 @@ function buildDashboard(book) {
 
   sheet.setColumnWidth(1, 280);
   sheet.getRange('A1').setFontWeight('bold').setFontSize(14);
-  ['A3', 'A10', 'A14', 'A25'].forEach(cell => sheet.getRange(cell).setFontWeight('bold'));
+  ['A3', 'A10', 'A14', 'A26'].forEach(cell => sheet.getRange(cell).setFontWeight('bold'));
   sheet.getRange(top, 1).setFontWeight('bold');
-  sheet.getRange(top, 4).setFontWeight('bold');
   sheet.getRange(hoursRow, 1).setFontWeight('bold');
-  ['B7', 'B26', 'B30'].forEach(cell => sheet.getRange(cell).setNumberFormat('0%'));
+  ['B7', 'B27', 'B31'].forEach(cell => sheet.getRange(cell).setNumberFormat('0%'));
 }
 
 function letter(columns, name) {

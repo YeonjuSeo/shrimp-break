@@ -9,11 +9,11 @@ import AppKit
 /// - 이름·이메일·컴퓨터 이름은 보내지 않는다. id 는 동의할 때 만든 무작위 값이다.
 @MainActor
 final class Telemetry {
-    enum QuickAction { case restart, sit, stand }
+    enum QuickAction { case restart, sit, stand, move }
 
     private enum Consent: String { case unknown, granted, denied }
 
-    private enum SegmentKind: String, Codable { case sat, stood, paused }
+    private enum SegmentKind: String, Codable { case sat, stood, moved, paused }
 
     private struct Segment {
         let kind: SegmentKind
@@ -168,10 +168,14 @@ final class Telemetry {
             lastPhaseKind = phaseKind
         }
 
-        // 알림 중에는 posture 가 이미 다음 자세로 넘어가 있지만, 사용자는 아직 이전 자세다.
-        let posture = phaseKind == "alerting" ? scheduler.posture.toggled : scheduler.posture
+        // 알림 중에는 다음 루틴으로 넘어가 있지만, 사용자는 아직 이전 루틴을 하고 있다 (activity).
         let kind: SegmentKind? = switch phaseKind {
-        case "counting", "alerting": posture == .sitting ? .sat : .stood
+        case "counting", "alerting":
+            switch scheduler.activity {
+            case .sitting: .sat
+            case .standing: .stood
+            case .moving: .moved
+            }
         case "paused": .paused
         default: nil
         }
@@ -215,6 +219,7 @@ final class Telemetry {
         case .restart: day.quickRestart += 1
         case .sit: day.quickSit += 1
         case .stand: day.quickStand += 1
+        case .move: day.quickMove = (day.quickMove ?? 0) + 1
         }
         save()
     }
@@ -229,10 +234,9 @@ final class Telemetry {
         }
         guard current != previous else { return }
         let changes: [(String, String, String)] = [
-            ("separate_timers", "\(previous.separate)", "\(current.separate)"),
-            ("interval_minutes", "\(previous.interval)", "\(current.interval)"),
             ("sitting_minutes", "\(previous.sitting)", "\(current.sitting)"),
             ("standing_minutes", "\(previous.standing)", "\(current.standing)"),
+            ("moving_minutes", "\(previous.moving)", "\(current.moving)"),
             ("away_threshold", "\(previous.away)", "\(current.away)"),
             ("escalation_seconds", "\(previous.escalation)", "\(current.escalation)"),
         ].filter { $0.1 != $0.2 }
@@ -294,17 +298,19 @@ final class Telemetry {
         switch segment.kind {
         case .sat: day.satSeconds += seconds
         case .stood: day.stoodSeconds += seconds
+        case .moved: day.movedSeconds = (day.movedSeconds ?? 0) + seconds
         case .paused: day.pausedSeconds += seconds
         }
         self.segment = nil
     }
 
     private func dailyEvent(for stats: DayStats, openSegmentSeconds: (kind: SegmentKind, seconds: TimeInterval)?) -> Event {
-        var sat = stats.satSeconds, stood = stats.stoodSeconds, paused = stats.pausedSeconds
+        var sat = stats.satSeconds, stood = stats.stoodSeconds, moved = stats.movedSeconds ?? 0, paused = stats.pausedSeconds
         if let open = openSegmentSeconds {
             switch open.kind {
             case .sat: sat += open.seconds
             case .stood: stood += open.seconds
+            case .moved: moved += open.seconds
             case .paused: paused += open.seconds
             }
         }
@@ -322,12 +328,14 @@ final class Telemetry {
             "max_reaction_sec": stats.maxReactionSeconds.rounded(),
             "sat_minutes": (sat / 60).rounded(),
             "stood_minutes": (stood / 60).rounded(),
+            "moved_minutes": (moved / 60).rounded(),
             "pauses": Double(stats.pauses),
             "paused_minutes": (paused / 60).rounded(),
             "away_count": Double(stats.awayCount),
             "quick_restart": Double(stats.quickRestart),
             "quick_sit": Double(stats.quickSit),
             "quick_stand": Double(stats.quickStand),
+            "quick_move": Double(stats.quickMove ?? 0),
             "errors": 0,
         ]
         numbers.forEach { event[$0.key] = .number($0.value) }
@@ -368,17 +376,16 @@ final class Telemetry {
     }
 
     private func currentSettings() -> SettingsSnapshot {
-        SettingsSnapshot(separate: Settings.usesSeparatePostureTimers, interval: Settings.intervalMinutes,
-                         sitting: Settings.sittingMinutes, standing: Settings.standingMinutes,
+        SettingsSnapshot(sitting: Settings.sittingMinutes, standing: Settings.standingMinutes,
+                         moving: Settings.movingMinutes,
                          away: Settings.awayThresholdMinutes, escalation: Settings.escalationSeconds)
     }
 
     private func settingsFields(_ settings: SettingsSnapshot) -> Event {
         [
-            "separate_timers": .bool(settings.separate),
-            "interval_minutes": .number(Double(settings.interval)),
             "sitting_minutes": .number(Double(settings.sitting)),
             "standing_minutes": .number(Double(settings.standing)),
+            "moving_minutes": .number(Double(settings.moving)),
             "away_threshold": .number(Double(settings.away)),
             "escalation_seconds": .number(Double(settings.escalation)),
         ]
@@ -511,11 +518,11 @@ private struct QueuedEvent: Codable {
     let body: Event
 }
 
+/// 예전 버전(타이머 한 개/두 개)이 저장한 값은 모양이 달라 읽히지 않는다 → 처음 한 번은 비교 없이 새로 저장한다.
 private struct SettingsSnapshot: Codable, Equatable {
-    let separate: Bool
-    let interval: Int
     let sitting: Int
     let standing: Int
+    let moving: Int
     let away: Int
     let escalation: Int
 }
@@ -533,12 +540,15 @@ private struct DayStats: Codable {
     var maxReactionSeconds: Double = 0
     var satSeconds: Double = 0
     var stoodSeconds: Double = 0
+    /// 움직이기가 생기기 전 버전이 저장한 하루 기록에도 없는 값이라 Optional (없으면 0).
+    var movedSeconds: Double?
     var pausedSeconds: Double = 0
     var pauses = 0
     var awayCount = 0
     var quickRestart = 0
     var quickSit = 0
     var quickStand = 0
+    var quickMove: Int?
     /// 시간(0~23)별 자세 바꾼 횟수.
     var ackHours: [Int: Int] = [:]
 

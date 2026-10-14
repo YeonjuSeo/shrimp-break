@@ -24,6 +24,8 @@ namespace ShrimpBreak
                 SynchronizationContext.SetSynchronizationContext(uiContext);
                 Ui.Initialize(uiContext);
 
+                // 스케줄러가 첫 루틴을 정하기 전에 예전 타이머 설정을 옮겨 둔다.
+                Settings.MigrateIfNeeded();
                 using (var app = new ShrimpBreakApp())
                     Application.Run(app);
             }
