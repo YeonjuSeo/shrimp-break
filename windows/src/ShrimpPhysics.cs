@@ -310,14 +310,18 @@ namespace ShrimpBreak
         public const int LaneCount = 5;
 
         // 띠별 높이·파고·물결 간격(새우 크기 배수)과 출렁임 속도(rad/s)·위상.
-        // 길고 완만한 물결 띠가 겹겹이 쌓인 모양. 띠마다 값을 달리해 단조롭지 않게.
-        static readonly double[] LaneBase = { 0.20, 0.45, 0.72, 1.00, 1.28 };
-        static readonly double[] LaneAmplitude = { 0.12, 0.20, 0.16, 0.26, 0.18 };
-        static readonly double[] LaneWavelength = { 5.0, 6.5, 4.2, 7.5, 5.8 };
+        // 물결 띠가 겹겹이 쌓인 모양. 띠마다 파고 차이를 크게 두고(잔잔한 띠 ↔ 크게 출렁이는 띠),
+        // 짧은 물결을 하나 더 겹쳐 뒤쪽도 평평하지 않게 크고 작은 굴곡이 섞이게 한다.
+        static readonly double[] LaneBase = { 0.20, 0.50, 0.80, 1.15, 1.50 };
+        static readonly double[] LaneAmplitude = { 0.10, 0.35, 0.18, 0.50, 0.28 };
+        static readonly double[] LaneWavelength = { 3.6, 5.2, 2.8, 6.4, 4.4 };
         static readonly double[] LaneSpeed = { 3.2, 2.6, 3.8, 2.2, 3.0 };
         static readonly double[] LanePhase = { 0, 2.1, 4.0, 1.1, 5.2 };
-        /// <summary>앞쪽 비탈 위 마루가 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 띠일수록 높이 솟는다.</summary>
-        static readonly double[] LaneCrest = { 0.20, 0.30, 0.40, 0.50, 0.60 };
+        /// <summary>겹치는 짧은 물결: 진폭은 띠 파고의 40%, 간격은 띠 물결 간격의 47%.</summary>
+        const double RippleAmplitudeRatio = 0.4;
+        const double RippleWavelengthRatio = 0.47;
+        /// <summary>앞쪽 비탈 위 마루가 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 물결과 균형이 맞게 너무 높지 않게.</summary>
+        static readonly double[] LaneCrest = { 0.15, 0.25, 0.30, 0.40, 0.45 };
         const double CrestWidth = 1.2;
         /// <summary>
         /// 앞쪽 비탈 길이 (띠별, 새우 크기 배수). 맨 앞에서는 높이 0(바닥)이고 이만큼 뒤에서 본래 높이가 된다
@@ -330,7 +334,7 @@ namespace ShrimpBreak
 
         /// <summary>띠가 차지하는 가장 높은 높이 (바닥 기준, 새우 크기 배수, 여유 포함). 파도 창 높이를 정하는 데 쓴다.</summary>
         public static readonly double MaxHeightRatio =
-            Enumerable.Range(0, LaneCount).Max(lane => LaneBase[lane] + LaneAmplitude[lane] + LaneCrest[lane]) + 0.15;
+            Enumerable.Range(0, LaneCount).Max(lane => LaneBase[lane] + LaneAmplitude[lane] * (1 + RippleAmplitudeRatio) + LaneCrest[lane]) + 0.15;
 
         /// <summary>좌우로 맞닿은(그리고 위아래로 겹치는) 모니터끼리 묶는다.</summary>
         public static List<WaveGroup> BuildGroups(IReadOnlyList<StageGeometry> stages, Func<StageGeometry, double> sizeOf)
@@ -376,8 +380,12 @@ namespace ShrimpBreak
             var behind = Math.Max(0, front - x);
             var ramp = LaneRamp[lane] * size;
             var crestOffset = (behind - 0.9 * ramp) / (CrestWidth * size);
+            var amplitude = LaneAmplitude[lane] * size;
+            var wavelength = LaneWavelength[lane] * size;
             var height = LaneBase[lane] * size
-                         + LaneAmplitude[lane] * size * Math.Sin(2 * Math.PI * x / (LaneWavelength[lane] * size) - LaneSpeed[lane] * t + LanePhase[lane])
+                         + amplitude * Math.Sin(2 * Math.PI * x / wavelength - LaneSpeed[lane] * t + LanePhase[lane])
+                         + amplitude * RippleAmplitudeRatio
+                           * Math.Sin(2 * Math.PI * x / (wavelength * RippleWavelengthRatio) + 1.6 * LaneSpeed[lane] * t + 2 * LanePhase[lane])
                          + LaneCrest[lane] * size * Math.Exp(-crestOffset * crestOffset);
             var progress = Math.Min(1, behind / ramp);
             var envelope = progress * progress * (3 - 2 * progress); // smoothstep: 맨 앞 0 → 비탈 끝 1

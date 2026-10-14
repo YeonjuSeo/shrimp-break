@@ -570,14 +570,18 @@ private enum Wave {
     static let laneCount = 5
 
     // 띠별 높이·파고·물결 간격(새우 크기 배수)과 출렁임 속도(rad/s)·위상.
-    // 길고 완만한 물결 띠가 겹겹이 쌓인 모양. 띠마다 값을 달리해 단조롭지 않게.
-    private static let base: [CGFloat] = [0.20, 0.45, 0.72, 1.00, 1.28]
-    private static let amplitude: [CGFloat] = [0.12, 0.20, 0.16, 0.26, 0.18]
-    private static let wavelength: [CGFloat] = [5.0, 6.5, 4.2, 7.5, 5.8]
+    // 물결 띠가 겹겹이 쌓인 모양. 띠마다 파고 차이를 크게 두고(잔잔한 띠 ↔ 크게 출렁이는 띠),
+    // 짧은 물결을 하나 더 겹쳐 뒤쪽도 평평하지 않게 크고 작은 굴곡이 섞이게 한다.
+    private static let base: [CGFloat] = [0.20, 0.50, 0.80, 1.15, 1.50]
+    private static let amplitude: [CGFloat] = [0.10, 0.35, 0.18, 0.50, 0.28]
+    private static let wavelength: [CGFloat] = [3.6, 5.2, 2.8, 6.4, 4.4]
     private static let speed: [CGFloat] = [3.2, 2.6, 3.8, 2.2, 3.0]
     private static let phase: [CGFloat] = [0, 2.1, 4.0, 1.1, 5.2]
-    /// 앞쪽 비탈 위 마루가 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 띠일수록 높이 솟는다.
-    private static let crest: [CGFloat] = [0.20, 0.30, 0.40, 0.50, 0.60]
+    /// 겹치는 짧은 물결: 진폭은 띠 파고의 40%, 간격은 띠 물결 간격의 47%.
+    private static let rippleAmplitudeRatio: CGFloat = 0.4
+    private static let rippleWavelengthRatio: CGFloat = 0.47
+    /// 앞쪽 비탈 위 마루가 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 물결과 균형이 맞게 너무 높지 않게.
+    private static let crest: [CGFloat] = [0.15, 0.25, 0.30, 0.40, 0.45]
     private static let crestWidth: CGFloat = 1.2
     /// 앞쪽 비탈 길이 (띠별, 새우 크기 배수). 맨 앞에서는 높이 0(바닥)이고 이만큼 뒤에서 본래 높이가 된다
     /// → 앞쪽이 수직으로 끊기지 않고 바닥으로 내려앉는다. 띠마다 길이를 달리해 앞쪽도 층층이 겹쳐 보이게.
@@ -626,8 +630,12 @@ private enum Wave {
         let behind = max(0, front - x)
         let rampLength = ramp[lane] * size
         let crestOffset = (behind - 0.9 * rampLength) / (crestWidth * size)
+        let laneAmplitude = amplitude[lane] * size
+        let laneWavelength = wavelength[lane] * size
         let height = base[lane] * size
-            + amplitude[lane] * size * sin(2 * .pi * x / (wavelength[lane] * size) - speed[lane] * t + phase[lane])
+            + laneAmplitude * sin(2 * .pi * x / laneWavelength - speed[lane] * t + phase[lane])
+            + laneAmplitude * rippleAmplitudeRatio
+                * sin(2 * .pi * x / (laneWavelength * rippleWavelengthRatio) + 1.6 * speed[lane] * t + 2 * phase[lane])
             + crest[lane] * size * exp(-crestOffset * crestOffset)
         let progress = min(1, behind / rampLength)
         let envelope = progress * progress * (3 - 2 * progress) // smoothstep: 맨 앞 0 → 비탈 끝 1
