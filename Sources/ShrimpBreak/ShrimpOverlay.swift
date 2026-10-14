@@ -33,6 +33,8 @@ final class ShrimpOverlay: NSObject {
     /// 파도가 쓸어가는 중이면 시작 시각. 모니터별 곡선 레이어는 waveLayers.
     private var sweepStartedAt: CFTimeInterval?
     private var waveLayers: [CGDirectDisplayID: [WaveBand]] = [:]
+    /// 파도가 지나가는 모니터 묶음 (좌우로 맞닿은 모니터들). 새우가 있는 묶음만.
+    private var waveGroups: [WaveGroup] = []
 
     private static let shrimpSizeMillimeters: CGFloat = 50
     private static let maxShrimps = 40
@@ -106,7 +108,8 @@ final class ShrimpOverlay: NSObject {
         CATransaction.commit()
     }
 
-    /// 클릭했을 때: 파도가 밀려와 새우들을 태우고 화면 밖으로 쓸어간다 (약 1.9초 뒤 정리).
+    /// 클릭했을 때: 파도가 밀려와 새우들을 태우고 화면 밖으로 쓸어간다.
+    /// 좌우로 맞닿은 모니터들은 파도 하나가 이어서 지나가고, 위아래로 쌓인 모니터는 각자 자기 바닥에서 지나간다.
     /// 진행 중에는 clearAll·클릭이 무시된다. 계산 규칙은 Windows 버전 WaveSweep 과 같다(그쪽에 테스트).
     func sweepAway() {
         guard !shrimps.isEmpty, !isClearing else { return }
@@ -115,12 +118,13 @@ final class ShrimpOverlay: NSObject {
         stages.forEach { $0.setAcceptsMouse(false) }
         NSCursor.arrow.set()
 
-        // 새우가 있는 모니터마다 물결 띠 5개. 새우보다 아래에 깐다.
+        // 새우가 있는 모니터 묶음마다, 묶음 안 모든 모니터에 물결 띠 5개. 새우보다 아래에 깐다.
         // 뒤(높은 띠)부터 앞(낮은 띠) 순서로 쌓아 겹겹이 쌓인 물결이 되게 한다.
-        let homes = Set(shrimps.map { $0.home.id })
+        let allGroups = Wave.buildGroups(stages) { Self.shrimpSizeMillimeters * $0.pointsPerMillimeter }
+        waveGroups = allGroups.filter { group in shrimps.contains { shrimp in group.contains(shrimp.home) } }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for stage in stages where homes.contains(stage.id) {
+        for stage in waveGroups.flatMap(\.stages) {
             let bands = (0..<Wave.laneCount).map { WaveBand(lane: $0) }
             for (index, band) in bands.reversed().enumerated() {
                 stage.rootLayer.insertSublayer(band.layer, at: UInt32(index))
@@ -219,10 +223,13 @@ final class ShrimpOverlay: NSObject {
     }
 
     private func stepSweep(t: CGFloat, dt: CGFloat) {
-        guard t < Wave.totalDuration else { return finishClear() }
+        guard t < Wave.totalDuration(waveGroups) else { return finishClear() }
 
         for shrimp in shrimps {
-            if shrimp.ride == nil, let ride = Wave.pickUp(shrimp, t: t) { shrimp.ride = ride }
+            if shrimp.ride == nil, let group = waveGroups.first(where: { $0.contains(shrimp.home) }),
+               let ride = Wave.pickUp(shrimp, group: group, t: t) {
+                shrimp.ride = ride
+            }
             if let ride = shrimp.ride {
                 Wave.ride(shrimp, ride, t: t, dt: dt)
             } else {
@@ -233,22 +240,22 @@ final class ShrimpOverlay: NSObject {
         // 곡선 다시 그리기 (지나간 자리까지만, 끝나갈 땐 옅어짐)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let opacity = Float(Wave.opacity(t))
         for stage in stages {
-            guard let bands = waveLayers[stage.id] else { continue }
-            let size = Self.shrimpSizeMillimeters * stage.pointsPerMillimeter
-            let front = Wave.front(stage.frame, size: size, t: t)
+            guard let bands = waveLayers[stage.id], let group = waveGroups.first(where: { $0.contains(stage) }) else { continue }
+            let opacity = Float(Wave.opacity(group, t: t))
+            let front = Wave.front(group, t: t)
             for band in bands {
+                // 물결 모양·앞쪽은 묶음 전체로 이어지고, 높이는 이 모니터 바닥에 붙는다.
                 let line = CGMutablePath()
                 let end = min(front, stage.frame.maxX)
                 var x = stage.frame.minX
                 var lastX = x
                 while x <= end {
                     let point = CGPoint(x: x - stage.frame.minX,
-                                        y: Wave.y(lane: band.lane, x: x, t: t, front: front, stage: stage.frame, size: size) - stage.frame.minY)
+                                        y: Wave.y(lane: band.lane, x: x, t: t, front: front, floor: stage.frame.minY, size: group.size) - stage.frame.minY)
                     if line.isEmpty { line.move(to: point) } else { line.addLine(to: point) }
                     lastX = x
-                    x += 10
+                    x = x < end && x + 10 > end ? end : x + 10 // 마지막 점은 앞쪽에 딱 맞춘다
                 }
                 // 띠: 물결 윗면 아래를 화면 바닥까지 채운다.
                 let water = CGMutablePath()
@@ -369,8 +376,8 @@ final class ShrimpOverlay: NSObject {
             let transform = CGAffineTransform(rotationAngle: tilt).scaledBy(x: facing, y: 1)
 
             for stage in stages {
-                // 파도를 탄 새우는 그 모니터 밖(이웃 모니터)으로는 그리지 않는다 → 화면 끝에서 빠져나가 사라진다.
-                let isOtherStage = shrimp.ride.map { $0.stage !== stage } ?? false
+                // 파도를 탄 새우는 그 묶음 밖 모니터에는 그리지 않는다 → 묶음 끝에서 빠져나가 사라진다.
+                let isOtherStage = shrimp.ride.map { !$0.group.contains(stage) } ?? false
                 guard stage.frame.intersects(bounds), !isOtherStage else {
                     shrimp.layers.removeValue(forKey: stage.id)?.removeFromSuperlayer()
                     continue
@@ -403,6 +410,7 @@ final class ShrimpOverlay: NSObject {
         shrimps.removeAll()
         waveLayers.values.flatMap { $0 }.forEach { $0.layer.removeFromSuperlayer() }
         waveLayers.removeAll()
+        waveGroups = []
         sweepStartedAt = nil
         isClearing = false
         isHoveringShrimp = false
@@ -487,16 +495,45 @@ private final class WaveRide {
     let offsetRatio: CGFloat
     /// 새우마다 출렁임이 다르게 보이도록 하는 위상.
     let seed: CGFloat
-    /// 올라탄 모니터 (이 모니터의 파도를 따라간다).
-    let stage: ScreenStage
+    /// 올라탄 파도의 모니터 묶음 (이 묶음 끝까지 쓸려 간다).
+    let group: WaveGroup
     /// 그림 기울기 (라디안).
     var tilt: CGFloat = 0
 
-    init(lane: Int, offsetRatio: CGFloat, seed: CGFloat, stage: ScreenStage) {
+    init(lane: Int, offsetRatio: CGFloat, seed: CGFloat, group: WaveGroup) {
         self.lane = lane
         self.offsetRatio = offsetRatio
         self.seed = seed
-        self.stage = stage
+        self.group = group
+    }
+}
+
+/// 파도 하나가 이어서 지나가는 모니터 묶음 = 좌우로 맞닿은 모니터들 (한 "줄").
+/// 위아래로 쌓인 모니터나 사이가 떨어진 모니터는 각자 다른 묶음 → 각자 자기 바닥에서 파도가 지나간다.
+@MainActor
+private final class WaveGroup {
+    let stages: [ScreenStage]
+    let minX: CGFloat
+    let maxX: CGFloat
+    /// 물결 모양의 기준 크기 (모니터마다 새우 크기가 조금 달라도 물결이 끊기지 않도록 하나로).
+    let size: CGFloat
+
+    init(stages: [ScreenStage], size: CGFloat) {
+        self.stages = stages
+        self.size = size
+        minX = stages.map(\.frame.minX).min() ?? 0
+        maxX = stages.map(\.frame.maxX).max() ?? 0
+    }
+
+    func contains(_ stage: ScreenStage) -> Bool { stages.contains { $0 === stage } }
+
+    /// 파도 앞쪽이 묶음 왼쪽 밖에서 오른쪽 밖까지 가는 데 걸리는 시간.
+    var duration: CGFloat { (maxX - minX + 3 * size) / (Wave.speedRatio * size) }
+
+    /// x 위치의 모니터 (묶음 바깥이면 가장 가까운 끝 모니터).
+    func stage(at x: CGFloat) -> ScreenStage {
+        if let stage = stages.first(where: { x >= $0.frame.minX && x < $0.frame.maxX }) { return stage }
+        return x < minX ? stages.min { $0.frame.minX < $1.frame.minX }! : stages.max { $0.frame.maxX < $1.frame.maxX }!
     }
 }
 
@@ -518,12 +555,13 @@ private struct WaveBand {
 }
 
 /// 파도 계산 규칙. Windows 버전 ShrimpPhysics.cs 의 WaveSweep 과 같은 값·식 (그쪽에 시뮬레이션 테스트가 있다).
-/// 좌표는 전역(위가 +). 모니터마다 각자 파도가 왼쪽에서 오른쪽으로 지나간다.
+/// 좌표는 전역(위가 +). 모니터 묶음마다 파도 하나가 왼쪽 끝에서 오른쪽 끝까지 이어서 지나간다.
+/// 속도는 "초당 새우 크기 몇 배"로 정한다 → 모니터가 많아 거리가 길어도 같은 빠르기로 보인다.
 @MainActor
 private enum Wave {
-    static let duration: CGFloat = 1.9
+    /// 파도 앞쪽이 나아가는 빠르기 (초당 새우 크기 배수). 가로 4K 한 대 ≈ 1.6초.
+    static let speedRatio: CGFloat = 11
     static let fadeDuration: CGFloat = 0.4
-    static let totalDuration = duration + fadeDuration
     /// 겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).
     static let laneCount = 5
 
@@ -540,50 +578,85 @@ private enum Wave {
     /// 올라탄 새우가 파도 높이로 옮겨 가는 최대 세로 속도 (초당 새우 크기 배수).
     private static let maxSettleSpeedRatio: CGFloat = 8
 
-    /// t 초일 때 파도 앞쪽의 x. 화면 왼쪽 밖(새우 1마리)에서 오른쪽 밖(새우 2마리)까지.
-    static func front(_ stage: CGRect, size: CGFloat, t: CGFloat) -> CGFloat {
-        let progress = min(1, max(0, t / duration))
-        return stage.minX - size + (stage.width + 3 * size) * progress
+    /// 좌우로 맞닿은(그리고 위아래로 겹치는) 모니터끼리 묶는다.
+    static func buildGroups(_ stages: [ScreenStage], sizeOf: (ScreenStage) -> CGFloat) -> [WaveGroup] {
+        func touch(_ a: ScreenStage, _ b: ScreenStage) -> Bool {
+            (abs(a.frame.maxX - b.frame.minX) < 1 || abs(b.frame.maxX - a.frame.minX) < 1)
+                && a.frame.maxY > b.frame.minY && a.frame.minY < b.frame.maxY
+        }
+        var groups: [WaveGroup] = []
+        var visited: [ScreenStage] = []
+        for start in stages where !visited.contains(where: { $0 === start }) {
+            visited.append(start)
+            var members = [start]
+            var index = 0
+            while index < members.count {
+                for other in stages where !visited.contains(where: { $0 === other }) && touch(members[index], other) {
+                    visited.append(other)
+                    members.append(other)
+                }
+                index += 1
+            }
+            groups.append(WaveGroup(stages: members, size: members.map(sizeOf).max() ?? 1))
+        }
+        return groups
     }
 
-    static func y(lane: Int, x: CGFloat, t: CGFloat, front: CGFloat, stage: CGRect, size: CGFloat) -> CGFloat {
-        var y = stage.minY + base[lane] * size
+    /// 모든 파도가 끝나는 시각.
+    static func totalDuration(_ groups: [WaveGroup]) -> CGFloat {
+        (groups.map(\.duration).max() ?? 0) + fadeDuration
+    }
+
+    /// t 초일 때 파도 앞쪽의 x. 묶음 왼쪽 밖(새우 1마리)에서 오른쪽 밖(새우 2마리)까지.
+    static func front(_ group: WaveGroup, t: CGFloat) -> CGFloat {
+        min(group.maxX + 2 * group.size, group.minX - group.size + speedRatio * group.size * max(0, t))
+    }
+
+    /// 띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준).
+    static func y(lane: Int, x: CGFloat, t: CGFloat, front: CGFloat, floor: CGFloat, size: CGFloat) -> CGFloat {
+        var y = floor + base[lane] * size
             + amplitude[lane] * size * sin(2 * .pi * x / (wavelength[lane] * size) - speed[lane] * t + phase[lane])
         let behind = (front - x) / (crestWidth * size)
         if behind >= 0 { y += crest[lane] * size * exp(-behind * behind) }
         return y
     }
 
-    static func opacity(_ t: CGFloat) -> CGFloat {
-        if t <= duration { return 1 }
-        if t >= totalDuration { return 0 } // 계산 오차 없이 끝에서 정확히 0
-        return 1 - (t - duration) / fadeDuration
+    /// 끝나갈 때 띠의 불투명도 (1 → 0). 묶음마다 자기 파도가 다 지나간 뒤 옅어진다.
+    static func opacity(_ group: WaveGroup, t: CGFloat) -> CGFloat {
+        if t <= group.duration { return 1 }
+        if t >= group.duration + fadeDuration { return 0 } // 계산 오차 없이 끝에서 정확히 0
+        return 1 - (t - group.duration) / fadeDuration
     }
 
-    /// 파도 앞쪽이 새우에 닿았으면 지금 높이에 가장 가까운 곡선에 올라태운다.
-    static func pickUp(_ shrimp: Shrimp, t: CGFloat) -> WaveRide? {
-        let stage = shrimp.home
-        let front = front(stage.frame, size: shrimp.size, t: t)
+    /// 파도 앞쪽이 새우에 닿았으면 지금 높이에 가장 가까운 띠에 올라태운다.
+    static func pickUp(_ shrimp: Shrimp, group: WaveGroup, t: CGFloat) -> WaveRide? {
+        let front = front(group, t: t)
         guard front >= shrimp.x + shrimp.size * 0.3 else { return nil }
         let centerX = shrimp.x + shrimp.size / 2
+        let floor = group.stage(at: centerX).frame.minY
         let lane = (0..<laneCount).min { a, b in
-            abs(y(lane: a, x: centerX, t: t, front: front, stage: stage.frame, size: shrimp.size) - shrimp.y)
-                < abs(y(lane: b, x: centerX, t: t, front: front, stage: stage.frame, size: shrimp.size) - shrimp.y)
+            abs(y(lane: a, x: centerX, t: t, front: front, floor: floor, size: group.size) - shrimp.y)
+                < abs(y(lane: b, x: centerX, t: t, front: front, floor: floor, size: group.size) - shrimp.y)
         } ?? 0
         return WaveRide(lane: lane, offsetRatio: -0.3 - 0.6 * .random(in: 0...1),
-                        seed: .random(in: 0...(2 * .pi)), stage: stage)
+                        seed: .random(in: 0...(2 * .pi)), group: group)
     }
 
-    /// 올라탄 새우를 파도와 함께 옮긴다. 위아래로 출렁이고 좌우로 기우뚱한다.
+    /// 올라탄 새우를 파도와 함께 옮긴다. 위아래로 출렁이고 좌우로 기우뚱한다. 옆 모니터로 넘어가면 그 바닥을 따른다.
     static func ride(_ shrimp: Shrimp, _ ride: WaveRide, t: CGFloat, dt: CGFloat) {
         let size = shrimp.size
-        let front = front(ride.stage.frame, size: size, t: t)
+        let group = ride.group
+        let front = front(group, t: t)
         // 앞쪽에 밀려 오른쪽으로만 간다 (뒤로 끌려가지 않도록).
         shrimp.x = max(shrimp.x, front + ride.offsetRatio * size - size / 2)
+        let centerX = shrimp.x + size / 2
+        let stage = group.stage(at: centerX)
+        shrimp.home = stage
         let bob = 0.06 * size * sin(11 * t + ride.seed)
-        let target = y(lane: ride.lane, x: shrimp.x + size / 2, t: t, front: front, stage: ride.stage.frame, size: size)
+        let target = y(lane: ride.lane, x: centerX, t: t, front: front, floor: stage.frame.minY, size: group.size)
             - 0.25 * size + bob
-        // 순간이동 없이 따라가되, 높이 떠 있던 새우도 파도 위로 내려앉는 듯 보이도록 세로 속도에 상한.
+        // 순간이동 없이 따라가되, 높이 떠 있던 새우·바닥 높이가 다른 모니터로 넘어간 새우도
+        // 파도 위로 내려앉는 듯 보이도록 세로 속도에 상한.
         let step = (target - shrimp.y) * min(1, dt * 10)
         let maxStep = maxSettleSpeedRatio * size * dt
         shrimp.y += max(-maxStep, min(maxStep, step))

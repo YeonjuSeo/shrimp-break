@@ -42,6 +42,7 @@ namespace ShrimpBreak
         bool isSweeping;
         double sweepStartedAt;
         int sweepFrame;
+        List<WaveGroup> waveGroups = new List<WaveGroup>();
         readonly List<WaveWindow> waveWindows = new List<WaveWindow>();
         int fadeFrame;
         bool isHighResolutionTimer;
@@ -78,7 +79,8 @@ namespace ShrimpBreak
         }
 
         /// <summary>
-        /// 클릭했을 때: 파도가 밀려와 새우들을 태우고 화면 밖으로 쓸어간다 (약 2.9초 뒤 정리).
+        /// 클릭했을 때: 파도가 밀려와 새우들을 태우고 화면 밖으로 쓸어간다.
+        /// 좌우로 맞닿은 모니터들은 파도 하나가 이어서 지나가고, 위아래로 쌓인 모니터는 각자 자기 바닥에서 지나간다.
         /// 진행 중에는 ClearAll·클릭이 무시된다. 계산 규칙은 ShrimpPhysics.cs 의 WaveSweep (테스트 있음).
         /// </summary>
         public void SweepAway()
@@ -89,14 +91,17 @@ namespace ShrimpBreak
             sweepStartedAt = clock.Elapsed.TotalSeconds;
             sweepFrame = 0;
 
-            // 새우가 있는 모니터마다 파도 창을 깔고, 새우 창들을 그 위로 다시 올린다.
-            foreach (var stage in shrimps.Select(sprite => sprite.Body.Home).Distinct())
-            {
-                var wave = new WaveWindow(stage, ShrimpPhysics.ShrimpSizeMillimeters * stage.PixelsPerMillimeter);
-                wave.Draw(0);
-                wave.Show();
-                waveWindows.Add(wave);
-            }
+            // 새우가 있는 모니터 묶음마다, 묶음 안 모든 모니터에 파도 창을 깔고 새우 창들을 그 위로 다시 올린다.
+            var allGroups = WaveSweep.BuildGroups(stages, stage => ShrimpPhysics.ShrimpSizeMillimeters * stage.PixelsPerMillimeter);
+            waveGroups = shrimps.Select(sprite => WaveSweep.GroupOf(allGroups, sprite.Body.Home)).Distinct().ToList();
+            foreach (var group in waveGroups)
+                foreach (var stage in group.Stages)
+                {
+                    var wave = new WaveWindow(stage, group);
+                    wave.Draw(0);
+                    wave.Show();
+                    waveWindows.Add(wave);
+                }
             foreach (var sprite in shrimps) NativeMethods.BringToTop(sprite.Window.Handle);
             StartAnimating();
         }
@@ -171,14 +176,16 @@ namespace ShrimpBreak
 
         void StepSweep(double t, double dt)
         {
-            if (t >= WaveSweep.TotalDuration)
+            if (t >= WaveSweep.TotalDuration(waveGroups))
             {
                 FinishClear();
                 return;
             }
             foreach (var sprite in shrimps)
             {
-                if (sprite.Ride == null && WaveSweep.TryPickUp(sprite.Body, t, random, out var ride)) sprite.Ride = ride;
+                if (sprite.Ride == null
+                    && WaveSweep.TryPickUp(sprite.Body, WaveSweep.GroupOf(waveGroups, sprite.Body.Home), t, random, out var ride))
+                    sprite.Ride = ride;
                 if (sprite.Ride != null) WaveSweep.Ride(sprite.Body, sprite.Ride, t, dt);
                 else ShrimpPhysics.Move(sprite.Body, dt, stages); // 파도가 아직 안 닿은 새우는 계속 튄다
                 Render(sprite, force: false);
@@ -201,8 +208,8 @@ namespace ShrimpBreak
             // 그림의 "바닥 중앙"이 새우 몸의 바닥 중앙에 오도록. 화면 y 는 아래가 + 라서 부호를 뒤집는다.
             sprite.TopLeft = new Point((int)Math.Round(body.X + body.Size / 2 - bitmap.Side / 2.0),
                                        (int)Math.Round(-body.Y - (bitmap.Side + body.Size) / 2.0));
-            // 파도를 타고 자기 모니터 오른쪽 끝을 완전히 빠져나간 새우는 숨긴다 (이웃 모니터에 나타나지 않도록).
-            byte opacity = sprite.Ride != null && body.X >= sprite.Ride.Stage.MaxX ? (byte)0 : (byte)255;
+            // 파도를 타고 묶음 오른쪽 끝을 완전히 빠져나간 새우는 숨긴다 (묶음 밖 모니터에 나타나지 않도록).
+            byte opacity = sprite.Ride != null && body.X >= sprite.Ride.Group.MaxX ? (byte)0 : (byte)255;
             if (force || !key.Equals(sprite.Key))
             {
                 sprite.Window.Present(bitmap.Handle, bitmap.Side, sprite.TopLeft, opacity);
@@ -230,6 +237,7 @@ namespace ShrimpBreak
                 wave.Dispose();
             }
             waveWindows.Clear();
+            waveGroups = new List<WaveGroup>();
             isSweeping = false;
             isClearing = false;
         }

@@ -162,39 +162,66 @@ static class Program
         Check(name, "충돌로 바닥 아래로 크게 밀려나지 않음", maxBelowFloor < 45, $"{maxBelowFloor:F0}px");
     }
 
-    /// <summary>파도 쓸어가기: 모두 올라타고, 끝나면 모두 화면 오른쪽 밖, 올라탄 뒤 왼쪽으로 돌아가지 않음.</summary>
+    /// <summary>
+    /// 파도 쓸어가기 (모니터 묶음 단위): 묶음 수가 맞는지, 모두 올라타는지, 끝나면 모두 묶음 오른쪽 밖인지,
+    /// 왼쪽으로 끌려가지 않는지, 순간이동이 없는지, 위아래 모니터의 새우가 서로 섞이지 않는지.
+    /// </summary>
     static void RunWaveSweepTests()
     {
         const string name = "파도 쓸어가기";
-        foreach (var (label, stage) in new[]
+        double SizeOf(StageGeometry stage) => ShrimpPhysics.ShrimpSizeMillimeters * stage.PixelsPerMillimeter;
+
+        var scenarios = new (string label, StageGeometry[] stages, int expectedGroups)[]
         {
-            ("가로 4K", StageGeometry.FromScreen("wide", -2560, 0, 739, 2179, 1.0, 3.6)),
-            ("세로 4K", StageGeometry.FromScreen("tall", 0, 1440, 0, 2512, 1.0, 3.6)),
-            ("1080p 150%", StageGeometry.FromScreen("fhd", 0, 1920, 0, 1008, 1.5, 3.6)),
-        })
+            ("가로 4K 한 대", new[] { StageGeometry.FromScreen("wide", 0, 2560, 0, 1440, 1.0, 3.6) }, 1),
+            // 지금 쓰는 배치: 왼쪽 가로(바닥이 381px 높음) + 오른쪽 세로 → 파도 하나가 이어서 지나간다.
+            ("가로+세로 (바닥 높이 다름)", new[]
+            {
+                StageGeometry.FromScreen("landscape", -2560, 0, 739, 2179, 1.0, 3.6),
+                StageGeometry.FromScreen("portrait", 0, 1440, 0, 2512, 1.0, 3.6),
+            }, 1),
+            // 위아래로 쌓은 모니터 → 묶음 2개, 각자 자기 바닥에서
+            ("위아래로 쌓은 두 대", new[]
+            {
+                StageGeometry.FromScreen("top", 0, 1920, -1080, 0, 1.0, 3.6),
+                StageGeometry.FromScreen("bottom", 0, 1920, 0, 1040, 1.0, 3.6),
+            }, 2),
+            ("사이가 떨어진 두 대", new[]
+            {
+                StageGeometry.FromScreen("gapA", 0, 1920, 0, 1040, 1.0, 3.6),
+                StageGeometry.FromScreen("gapB", 2000, 3920, 0, 1040, 1.0, 3.6),
+            }, 2),
+            ("1080p 150%", new[] { StageGeometry.FromScreen("fhd", 0, 1920, 0, 1008, 1.5, 3.6) }, 1),
+        };
+
+        foreach (var (label, stages, expectedGroups) in scenarios)
         {
             var random = new Random(11);
-            var shrimps = Enumerable.Range(0, 40).Select(_ => ShrimpPhysics.Spawn(stage, random)).ToList();
-            // 1~3초 튀게 해서 높이·위치를 섞어 둔다.
+            var groups = WaveSweep.BuildGroups(stages, SizeOf);
+            Check(name, $"{label}: 모니터 묶음 {expectedGroups}개", groups.Count == expectedGroups, $"{groups.Count}개");
+
+            var shrimps = stages.SelectMany(stage => Enumerable.Range(0, 20).Select(_ => ShrimpPhysics.Spawn(stage, random))).ToList();
             for (var t = 0.0; t < 2.5; t += Dt)
             {
-                foreach (var s in shrimps) ShrimpPhysics.Move(s, Dt, new[] { stage });
+                foreach (var s in shrimps) ShrimpPhysics.Move(s, Dt, stages);
                 ShrimpPhysics.Collide(shrimps);
             }
+            var startGroup = shrimps.ToDictionary(s => s, s => WaveSweep.GroupOf(groups, s.Home));
 
             var rides = new Dictionary<ShrimpBody, WaveRide>();
             var movedLeft = 0;
             var maxJump = 0.0;
-            for (var t = 0.0; t <= WaveSweep.TotalDuration; t += Dt)
+            var total = WaveSweep.TotalDuration(groups);
+            for (var t = 0.0; t <= total; t += Dt)
             {
                 foreach (var s in shrimps)
                 {
                     if (!rides.TryGetValue(s, out var ride))
                     {
-                        if (WaveSweep.TryPickUp(s, t, random, out ride)) rides[s] = ride;
+                        if (WaveSweep.TryPickUp(s, WaveSweep.GroupOf(groups, s.Home), t, random, out ride)) rides[s] = ride;
                         else
                         {
-                            ShrimpPhysics.Move(s, Dt, new[] { stage });
+                            ShrimpPhysics.Move(s, Dt, stages);
                             continue;
                         }
                     }
@@ -204,15 +231,20 @@ static class Program
                     maxJump = Math.Max(maxJump, Math.Abs(s.Y - y));
                 }
             }
-            var allPicked = rides.Count == shrimps.Count;
-            var leftmost = shrimps.Min(s => s.X);
-            Console.WriteLine($"[{name}] {label}: 올라탄 새우 {rides.Count}/{shrimps.Count}, 끝났을 때 가장 왼쪽 새우 x={leftmost:F0} (화면 오른쪽 끝 {stage.MaxX:F0}), 한 프레임 최대 세로 이동 {maxJump:F0}px");
-            Check(name, $"{label}: 모든 새우가 파도에 올라탐", allPicked, $"{rides.Count}/{shrimps.Count}");
-            Check(name, $"{label}: 끝나면 모든 새우가 화면 오른쪽 밖", leftmost >= stage.MaxX, $"가장 왼쪽 {leftmost:F0}");
+
+            var notOut = shrimps.Count(s => s.X < rides[s].Group.MaxX);
+            var switchedGroup = shrimps.Count(s => rides.TryGetValue(s, out var r) && r.Group != startGroup[s]);
+            var durations = string.Join(", ", groups.Select(g => $"{g.Duration:F1}초"));
+            Console.WriteLine($"[{name}] {label}: 파도 {durations}, 올라탄 새우 {rides.Count}/{shrimps.Count}, 한 프레임 최대 세로 이동 {maxJump:F0}px");
+            Check(name, $"{label}: 모든 새우가 파도에 올라탐", rides.Count == shrimps.Count, $"{rides.Count}/{shrimps.Count}");
+            Check(name, $"{label}: 끝나면 모든 새우가 자기 묶음 오른쪽 밖", notOut == 0, $"{notOut}마리 남음");
             Check(name, $"{label}: 올라탄 뒤 왼쪽으로 끌려가지 않음", movedLeft == 0, $"{movedLeft}번");
-            Check(name, $"{label}: 올라탈 때 순간이동 없음 (한 프레임 세로 이동 < 새우 크기의 1/3)", maxJump < shrimps[0].Size / 3, $"{maxJump:F0}px");
+            Check(name, $"{label}: 순간이동 없음 (한 프레임 세로 이동 < 새우 크기의 1/3)", maxJump < SizeOf(stages[0]) / 3, $"{maxJump:F0}px");
+            Check(name, $"{label}: 다른 묶음(위아래 모니터)의 파도를 타지 않음", switchedGroup == 0, $"{switchedGroup}마리");
         }
-        Check(name, "끝나면 곡선이 완전히 투명", WaveSweep.Opacity(WaveSweep.TotalDuration) == 0, $"{WaveSweep.Opacity(WaveSweep.TotalDuration)}");
+
+        var single = WaveSweep.BuildGroups(new[] { StageGeometry.FromScreen("wide", 0, 2560, 0, 1440, 1.0, 3.6) }, SizeOf)[0];
+        Check(name, "끝나면 띠가 완전히 투명", WaveSweep.Opacity(single, single.Duration + WaveSweep.FadeDuration) == 0, "");
     }
 
     static void Check(string scenario, string what, bool ok, string detail)

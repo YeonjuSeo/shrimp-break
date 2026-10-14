@@ -27,6 +27,7 @@ namespace ShrimpBreak
         const int WaterAlpha = 224; // 0.88
 
         readonly StageGeometry stage;
+        readonly WaveGroup group;
         readonly double size;
         readonly int width;
         readonly int height;
@@ -35,10 +36,12 @@ namespace ShrimpBreak
         IntPtr dib;
         Bitmap canvas;
 
-        public WaveWindow(StageGeometry stage, double size)
+        /// <summary>group: 이 모니터가 속한 묶음. 파도 앞쪽·물결 모양은 묶음 전체로 이어지게 계산한다.</summary>
+        public WaveWindow(StageGeometry stage, WaveGroup group)
         {
             this.stage = stage;
-            this.size = size;
+            this.group = group;
+            size = group.Size;
             width = (int)Math.Ceiling(stage.MaxX - stage.MinX);
             height = (int)Math.Ceiling(WaveSweep.MaxHeightRatio * size);
             topY = stage.Floor + height;
@@ -77,7 +80,7 @@ namespace ShrimpBreak
         /// <summary>t 초일 때의 파도를 그려서 올린다.</summary>
         public void Draw(double t)
         {
-            var front = WaveSweep.Front(stage, size, t);
+            var front = WaveSweep.Front(group, t);
             var end = Math.Min(front, stage.MaxX);
 
             using (var g = Graphics.FromImage(canvas))
@@ -104,7 +107,7 @@ namespace ShrimpBreak
                 }
             }
 
-            Present((byte)Math.Round(255 * WaveSweep.Opacity(t)));
+            Present((byte)Math.Round(255 * WaveSweep.Opacity(group, t)));
         }
 
         PointF[] Curve(int lane, double t, double front, double end)
@@ -114,7 +117,7 @@ namespace ShrimpBreak
             for (var i = 0; i < count; i++)
             {
                 var x = Math.Min(end, stage.MinX + i * 10);
-                var y = WaveSweep.WaveY(lane, x, t, front, stage, size);
+                var y = WaveSweep.WaveY(lane, x, t, front, stage.Floor, size);
                 points[i] = new PointF((float)(x - stage.MinX), (float)(topY - y));
             }
             return points;

@@ -240,38 +240,72 @@ namespace ShrimpBreak
         static double Lerp(double a, double b, double t) => a + (b - a) * t;
     }
 
+    /// <summary>
+    /// 파도 하나가 이어서 지나가는 모니터 묶음 = 좌우로 맞닿은 모니터들 (한 "줄").
+    /// 위아래로 쌓인 모니터나 사이가 떨어진 모니터는 각자 다른 묶음 → 각자 자기 바닥에서 파도가 지나간다.
+    /// </summary>
+    public sealed class WaveGroup
+    {
+        public WaveGroup(IReadOnlyList<StageGeometry> stages, double size)
+        {
+            Stages = stages;
+            Size = size;
+            MinX = stages.Min(stage => stage.MinX);
+            MaxX = stages.Max(stage => stage.MaxX);
+        }
+
+        public IReadOnlyList<StageGeometry> Stages { get; }
+        public double MinX { get; }
+        public double MaxX { get; }
+        /// <summary>물결 모양의 기준 크기 (모니터마다 새우 크기가 조금 달라도 물결이 끊기지 않도록 하나로).</summary>
+        public double Size { get; }
+
+        /// <summary>파도 앞쪽이 묶음 왼쪽 밖에서 오른쪽 밖까지 가는 데 걸리는 시간.</summary>
+        public double Duration => (MaxX - MinX + 3 * Size) / (WaveSweep.SpeedRatio * Size);
+
+        /// <summary>x 위치의 모니터 (묶음 바깥이면 가장 가까운 끝 모니터).</summary>
+        public StageGeometry StageAt(double x)
+        {
+            foreach (var stage in Stages)
+                if (x >= stage.MinX && x < stage.MaxX) return stage;
+            return x < MinX ? Stages.OrderBy(stage => stage.MinX).First() : Stages.OrderBy(stage => stage.MaxX).Last();
+        }
+    }
+
     /// <summary>파도에 올라탄 새우의 상태.</summary>
     public sealed class WaveRide
     {
-        /// <summary>올라탄 곡선 (0 = 가장 낮은 곡선).</summary>
+        /// <summary>올라탄 띠 (0 = 가장 낮고 앞에 있는 띠).</summary>
         public int Lane;
         /// <summary>파도 앞쪽에서 얼마나 뒤에 붙어 가는지 (새우 크기 배수, 음수).</summary>
         public double OffsetRatio;
         /// <summary>새우마다 출렁임이 다르게 보이도록 하는 위상.</summary>
         public double Seed;
-        /// <summary>올라탄 모니터 (이 모니터의 파도를 따라간다).</summary>
-        public StageGeometry Stage;
+        /// <summary>올라탄 파도의 모니터 묶음 (이 묶음 끝까지 쓸려 간다).</summary>
+        public WaveGroup Group;
         /// <summary>그림 기울기 (라디안, 위가 + 인 좌표 기준으로 시계 반대 방향 +).</summary>
         public double Tilt;
     }
 
     /// <summary>
-    /// 새우를 클릭했을 때 파도가 쓸어가는 연출 (Mac 버전 ShrimpOverlay 의 파도와 같은 규칙).
-    /// 좌표는 위가 + 인 좌표. 모니터마다 각자 파도가 왼쪽에서 오른쪽으로 지나간다.
-    /// - 곡선 3개가 출렁이고, 맨 앞쪽은 볼록하게 솟아 있다.
-    /// - 파도 앞쪽이 새우에 닿으면 새우가 곡선 하나에 올라타 흔들리며 함께 쓸려 간다.
-    /// - 앞쪽이 화면 오른쪽 밖까지 지나가면(Duration) 곡선이 옅어지며(FadeDuration) 끝난다.
+    /// 새우를 클릭했을 때 파도가 쓸어가는 연출 (Mac 버전 ShrimpOverlay 의 Wave 와 같은 규칙).
+    /// 좌표는 위가 + 인 좌표. 모니터 묶음(좌우로 맞닿은 모니터들)마다 파도 하나가 왼쪽 끝에서 오른쪽 끝까지
+    /// 이어서 지나간다. 물결 모양은 이어지고, 높이는 각 모니터 바닥에 붙는다.
+    /// - 길고 완만한 물결 띠 5개가 겹겹이 쌓여 출렁이고, 맨 앞쪽은 볼록하게 솟아 있다.
+    /// - 파도 앞쪽이 새우에 닿으면 새우가 띠 하나에 올라타 흔들리며 함께 쓸려 간다 (옆 모니터로도 넘어간다).
+    /// - 앞쪽이 묶음 오른쪽 밖까지 지나가면 띠가 옅어지며(FadeDuration) 끝난다.
+    /// 속도는 "초당 새우 크기 몇 배"로 정한다 → 모니터가 많아 거리가 길어도 같은 빠르기로 보인다.
     /// </summary>
     public static class WaveSweep
     {
-        public const double Duration = 1.9;
+        /// <summary>파도 앞쪽이 나아가는 빠르기 (초당 새우 크기 배수). 가로 4K 한 대 ≈ 1.6초.</summary>
+        public const double SpeedRatio = 11;
         public const double FadeDuration = 0.4;
-        public const double TotalDuration = Duration + FadeDuration;
         /// <summary>겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).</summary>
         public const int LaneCount = 5;
 
-        // 곡선별 높이·진폭·물결 간격(새우 크기 배수)과 출렁임 속도(rad/s)·위상
-        // 길고 완만한 물결 띠가 겹겹이 쌓인 모양. 띠마다 높이·파고·간격·출렁임 속도를 달리해 단조롭지 않게.
+        // 띠별 높이·파고·물결 간격(새우 크기 배수)과 출렁임 속도(rad/s)·위상.
+        // 길고 완만한 물결 띠가 겹겹이 쌓인 모양. 띠마다 값을 달리해 단조롭지 않게.
         static readonly double[] LaneBase = { 0.20, 0.45, 0.72, 1.00, 1.28 };
         static readonly double[] LaneAmplitude = { 0.12, 0.20, 0.16, 0.26, 0.18 };
         static readonly double[] LaneWavelength = { 5.0, 6.5, 4.2, 7.5, 5.8 };
@@ -281,51 +315,78 @@ namespace ShrimpBreak
         static readonly double[] LaneCrest = { 0.20, 0.30, 0.40, 0.50, 0.60 };
         const double CrestWidth = 1.2;
 
-        /// <summary>올라탄 새우가 파도 높이로 옮겨 가는 최대 세로 속도 (초당 새우 크기 배수).</summary>
+        /// <summary>올라탄 새우가 파도 높이로 옮겨 가는 최대 세로 속도 (초당 새우 크기 배수). 바닥 높이가 다른 모니터로 넘어갈 때도 부드럽게.</summary>
         public const double MaxSettleSpeedRatio = 8;
 
-        /// <summary>곡선이 차지하는 가장 높은 높이 (바닥 기준, 새우 크기 배수, 선 두께 여유 포함). 파도 창 높이를 정하는 데 쓴다.</summary>
+        /// <summary>띠가 차지하는 가장 높은 높이 (바닥 기준, 새우 크기 배수, 여유 포함). 파도 창 높이를 정하는 데 쓴다.</summary>
         public static readonly double MaxHeightRatio =
             Enumerable.Range(0, LaneCount).Max(lane => LaneBase[lane] + LaneAmplitude[lane] + LaneCrest[lane]) + 0.15;
 
-        /// <summary>t 초일 때 파도 앞쪽의 x. 화면 왼쪽 밖(새우 1마리)에서 오른쪽 밖(새우 2마리)까지.</summary>
-        public static double Front(StageGeometry stage, double size, double t)
+        /// <summary>좌우로 맞닿은(그리고 위아래로 겹치는) 모니터끼리 묶는다.</summary>
+        public static List<WaveGroup> BuildGroups(IReadOnlyList<StageGeometry> stages, Func<StageGeometry, double> sizeOf)
         {
-            var progress = Math.Min(1, Math.Max(0, t / Duration));
-            return stage.MinX - size + (stage.MaxX - stage.MinX + 3 * size) * progress;
+            bool Touch(StageGeometry a, StageGeometry b) =>
+                (Math.Abs(a.MaxX - b.MinX) < 1 || Math.Abs(b.MaxX - a.MinX) < 1) && a.Top > b.Floor && a.Floor < b.Top;
+
+            var groups = new List<WaveGroup>();
+            var visited = new HashSet<StageGeometry>();
+            foreach (var start in stages)
+            {
+                if (!visited.Add(start)) continue;
+                var members = new List<StageGeometry> { start };
+                for (var i = 0; i < members.Count; i++)
+                    foreach (var other in stages)
+                        if (!visited.Contains(other) && Touch(members[i], other))
+                        {
+                            visited.Add(other);
+                            members.Add(other);
+                        }
+                groups.Add(new WaveGroup(members, members.Max(sizeOf)));
+            }
+            return groups;
         }
 
-        /// <summary>곡선 lane 의 x 위치 높이. x 가 앞쪽보다 뒤(왼쪽)일 때만 의미가 있다.</summary>
-        public static double WaveY(int lane, double x, double t, double front, StageGeometry stage, double size)
+        public static WaveGroup GroupOf(IEnumerable<WaveGroup> groups, StageGeometry stage)
+            => groups.First(group => group.Stages.Contains(stage));
+
+        /// <summary>모든 파도가 끝나는 시각.</summary>
+        public static double TotalDuration(IEnumerable<WaveGroup> groups) => groups.Max(group => group.Duration) + FadeDuration;
+
+        /// <summary>t 초일 때 파도 앞쪽의 x. 묶음 왼쪽 밖(새우 1마리)에서 오른쪽 밖(새우 2마리)까지.</summary>
+        public static double Front(WaveGroup group, double t)
+            => Math.Min(group.MaxX + 2 * group.Size, group.MinX - group.Size + SpeedRatio * group.Size * Math.Max(0, t));
+
+        /// <summary>띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준). x 가 앞쪽보다 뒤(왼쪽)일 때만 의미가 있다.</summary>
+        public static double WaveY(int lane, double x, double t, double front, double floor, double size)
         {
-            var y = stage.Floor + LaneBase[lane] * size
+            var y = floor + LaneBase[lane] * size
                     + LaneAmplitude[lane] * size * Math.Sin(2 * Math.PI * x / (LaneWavelength[lane] * size) - LaneSpeed[lane] * t + LanePhase[lane]);
             var behind = (front - x) / (CrestWidth * size);
             if (behind >= 0) y += LaneCrest[lane] * size * Math.Exp(-behind * behind);
             return y;
         }
 
-        /// <summary>끝나갈 때 곡선의 불투명도 (1 → 0).</summary>
-        public static double Opacity(double t)
+        /// <summary>끝나갈 때 띠의 불투명도 (1 → 0). 묶음마다 자기 파도가 다 지나간 뒤 옅어진다.</summary>
+        public static double Opacity(WaveGroup group, double t)
         {
-            if (t <= Duration) return 1;
-            if (t >= TotalDuration) return 0; // 계산 오차 없이 끝에서 정확히 0
-            return 1 - (t - Duration) / FadeDuration;
+            if (t <= group.Duration) return 1;
+            if (t >= group.Duration + FadeDuration) return 0; // 계산 오차 없이 끝에서 정확히 0
+            return 1 - (t - group.Duration) / FadeDuration;
         }
 
-        /// <summary>파도 앞쪽이 새우에 닿았으면 올라태운다. 올라탔으면 true.</summary>
-        public static bool TryPickUp(ShrimpBody shrimp, double t, Random random, out WaveRide ride)
+        /// <summary>파도 앞쪽이 새우에 닿았으면 지금 높이에 가장 가까운 띠에 올라태운다. 올라탔으면 true.</summary>
+        public static bool TryPickUp(ShrimpBody shrimp, WaveGroup group, double t, Random random, out WaveRide ride)
         {
             ride = null;
-            var stage = shrimp.Home;
-            var front = Front(stage, shrimp.Size, t);
+            var front = Front(group, t);
             if (front < shrimp.X + shrimp.Size * 0.3) return false;
-            // 지금 높이에 가장 가까운 곡선에 올라탄다 (갑자기 위아래로 튀지 않도록).
+            var centerX = shrimp.X + shrimp.Size / 2;
+            var floor = group.StageAt(centerX).Floor;
             var lane = 0;
             var best = double.MaxValue;
             for (var i = 0; i < LaneCount; i++)
             {
-                var gap = Math.Abs(WaveY(i, shrimp.X + shrimp.Size / 2, t, front, stage, shrimp.Size) - shrimp.Y);
+                var gap = Math.Abs(WaveY(i, centerX, t, front, floor, group.Size) - shrimp.Y);
                 if (gap < best) { best = gap; lane = i; }
             }
             ride = new WaveRide
@@ -333,23 +394,26 @@ namespace ShrimpBreak
                 Lane = lane,
                 OffsetRatio = -0.3 - 0.6 * random.NextDouble(),
                 Seed = random.NextDouble() * 2 * Math.PI,
-                Stage = stage,
+                Group = group,
             };
             return true;
         }
 
-        /// <summary>올라탄 새우를 파도와 함께 옮긴다. 위아래로 출렁이고 좌우로 기우뚱한다.</summary>
+        /// <summary>올라탄 새우를 파도와 함께 옮긴다. 위아래로 출렁이고 좌우로 기우뚱한다. 옆 모니터로 넘어가면 그 바닥을 따른다.</summary>
         public static void Ride(ShrimpBody shrimp, WaveRide ride, double t, double dt)
         {
             var size = shrimp.Size;
-            var front = Front(ride.Stage, size, t);
-            var centerX = front + ride.OffsetRatio * size;
+            var group = ride.Group;
+            var front = Front(group, t);
             // 앞쪽에 밀려 오른쪽으로만 간다 (뒤로 끌려가지 않도록).
-            shrimp.X = Math.Max(shrimp.X, centerX - size / 2);
+            shrimp.X = Math.Max(shrimp.X, front + ride.OffsetRatio * size - size / 2);
+            var centerX = shrimp.X + size / 2;
+            var stage = group.StageAt(centerX);
+            shrimp.Home = stage;
             var bob = 0.06 * size * Math.Sin(11 * t + ride.Seed);
-            var target = WaveY(ride.Lane, shrimp.X + size / 2, t, front, ride.Stage, size) - 0.25 * size + bob;
-            // 처음 올라탈 때 순간이동하지 않도록 부드럽게 따라가되, 높이 떠 있던 새우도
-            // 파도 위로 내려앉는 듯 보이도록 세로 속도에 상한(초당 새우 크기의 8배)을 둔다.
+            var target = WaveY(ride.Lane, centerX, t, front, stage.Floor, group.Size) - 0.25 * size + bob;
+            // 순간이동 없이 따라가되, 높이 떠 있던 새우·바닥 높이가 다른 모니터로 넘어간 새우도
+            // 파도 위로 내려앉는 듯 보이도록 세로 속도에 상한을 둔다.
             var step = (target - shrimp.Y) * Math.Min(1, dt * 10);
             var maxStep = MaxSettleSpeedRatio * size * dt;
             shrimp.Y += Math.Max(-maxStep, Math.Min(maxStep, step));
