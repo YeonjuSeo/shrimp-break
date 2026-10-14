@@ -260,8 +260,9 @@ namespace ShrimpBreak
         /// <summary>물결 모양의 기준 크기 (모니터마다 새우 크기가 조금 달라도 물결이 끊기지 않도록 하나로).</summary>
         public double Size { get; }
 
-        /// <summary>파도 앞쪽이 묶음 왼쪽 밖에서 오른쪽 밖까지 가는 데 걸리는 시간.</summary>
-        public double Duration => (MaxX - MinX + 3 * Size) / (WaveSweep.SpeedRatio * Size);
+        /// <summary>파도 앞쪽이 묶음 왼쪽 끝 조금 앞에서 출발해, 모든 새우가 오른쪽 밖으로 나갈 때까지 걸리는 시간.</summary>
+        public double Duration => (MaxX - MinX + (WaveSweep.FrontStartRatio + WaveSweep.FrontEndRatio) * Size)
+                                  / (WaveSweep.SpeedRatio * Size);
 
         /// <summary>x 위치의 모니터 (묶음 바깥이면 가장 가까운 끝 모니터).</summary>
         public StageGeometry StageAt(double x)
@@ -299,7 +300,11 @@ namespace ShrimpBreak
     public static class WaveSweep
     {
         /// <summary>파도 앞쪽이 나아가는 빠르기 (초당 새우 크기 배수). 가로 4K 한 대 ≈ 1.6초.</summary>
-        public const double SpeedRatio = 11;
+        public const double SpeedRatio = 12.5;
+        /// <summary>앞쪽이 묶음 왼쪽 끝보다 얼마나 앞(왼쪽)에서 출발하는지 (새우 크기 배수).</summary>
+        public const double FrontStartRatio = 0.5;
+        /// <summary>앞쪽이 묶음 오른쪽 끝을 얼마나 지나서 멈추는지 (새우 크기 배수). 비탈 뒤에 탄 새우까지 다 빠져나가도록.</summary>
+        public const double FrontEndRatio = 4.5;
         public const double FadeDuration = 0.4;
         /// <summary>겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).</summary>
         public const int LaneCount = 5;
@@ -311,9 +316,14 @@ namespace ShrimpBreak
         static readonly double[] LaneWavelength = { 5.0, 6.5, 4.2, 7.5, 5.8 };
         static readonly double[] LaneSpeed = { 3.2, 2.6, 3.8, 2.2, 3.0 };
         static readonly double[] LanePhase = { 0, 2.1, 4.0, 1.1, 5.2 };
-        /// <summary>파도 맨 앞이 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 띠일수록 높이 솟는다.</summary>
+        /// <summary>앞쪽 비탈 위 마루가 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 띠일수록 높이 솟는다.</summary>
         static readonly double[] LaneCrest = { 0.20, 0.30, 0.40, 0.50, 0.60 };
         const double CrestWidth = 1.2;
+        /// <summary>
+        /// 앞쪽 비탈 길이 (띠별, 새우 크기 배수). 맨 앞에서는 높이 0(바닥)이고 이만큼 뒤에서 본래 높이가 된다
+        /// → 앞쪽이 수직으로 끊기지 않고 바닥으로 내려앉는다. 띠마다 길이를 달리해 앞쪽도 층층이 겹쳐 보이게.
+        /// </summary>
+        static readonly double[] LaneRamp = { 1.2, 1.6, 2.0, 2.4, 2.8 };
 
         /// <summary>올라탄 새우가 파도 높이로 옮겨 가는 최대 세로 속도 (초당 새우 크기 배수). 바닥 높이가 다른 모니터로 넘어갈 때도 부드럽게.</summary>
         public const double MaxSettleSpeedRatio = 8;
@@ -352,19 +362,30 @@ namespace ShrimpBreak
         /// <summary>모든 파도가 끝나는 시각.</summary>
         public static double TotalDuration(IEnumerable<WaveGroup> groups) => groups.Max(group => group.Duration) + FadeDuration;
 
-        /// <summary>t 초일 때 파도 앞쪽의 x. 묶음 왼쪽 밖(새우 1마리)에서 오른쪽 밖(새우 2마리)까지.</summary>
+        /// <summary>t 초일 때 파도 앞쪽의 x.</summary>
         public static double Front(WaveGroup group, double t)
-            => Math.Min(group.MaxX + 2 * group.Size, group.MinX - group.Size + SpeedRatio * group.Size * Math.Max(0, t));
+            => Math.Min(group.MaxX + FrontEndRatio * group.Size,
+                        group.MinX - FrontStartRatio * group.Size + SpeedRatio * group.Size * Math.Max(0, t));
 
-        /// <summary>띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준). x 가 앞쪽보다 뒤(왼쪽)일 때만 의미가 있다.</summary>
+        /// <summary>
+        /// 띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준). x 가 앞쪽보다 뒤(왼쪽)일 때만 의미가 있다.
+        /// 앞쪽에서는 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
+        /// </summary>
         public static double WaveY(int lane, double x, double t, double front, double floor, double size)
         {
-            var y = floor + LaneBase[lane] * size
-                    + LaneAmplitude[lane] * size * Math.Sin(2 * Math.PI * x / (LaneWavelength[lane] * size) - LaneSpeed[lane] * t + LanePhase[lane]);
-            var behind = (front - x) / (CrestWidth * size);
-            if (behind >= 0) y += LaneCrest[lane] * size * Math.Exp(-behind * behind);
-            return y;
+            var behind = Math.Max(0, front - x);
+            var ramp = LaneRamp[lane] * size;
+            var crestOffset = (behind - 0.9 * ramp) / (CrestWidth * size);
+            var height = LaneBase[lane] * size
+                         + LaneAmplitude[lane] * size * Math.Sin(2 * Math.PI * x / (LaneWavelength[lane] * size) - LaneSpeed[lane] * t + LanePhase[lane])
+                         + LaneCrest[lane] * size * Math.Exp(-crestOffset * crestOffset);
+            var progress = Math.Min(1, behind / ramp);
+            var envelope = progress * progress * (3 - 2 * progress); // smoothstep: 맨 앞 0 → 비탈 끝 1
+            return floor + height * envelope;
         }
+
+        /// <summary>새우가 앞쪽에서 얼마나 뒤에 타는지 (새우 크기 배수, 음수). 띠의 비탈 위 마루 근처.</summary>
+        static double RideOffsetRatio(int lane, Random random) => -LaneRamp[lane] * (0.75 + 0.35 * random.NextDouble());
 
         /// <summary>끝나갈 때 띠의 불투명도 (1 → 0). 묶음마다 자기 파도가 다 지나간 뒤 옅어진다.</summary>
         public static double Opacity(WaveGroup group, double t)
@@ -392,7 +413,7 @@ namespace ShrimpBreak
             ride = new WaveRide
             {
                 Lane = lane,
-                OffsetRatio = -0.3 - 0.6 * random.NextDouble(),
+                OffsetRatio = RideOffsetRatio(lane, random),
                 Seed = random.NextDouble() * 2 * Math.PI,
                 Group = group,
             };

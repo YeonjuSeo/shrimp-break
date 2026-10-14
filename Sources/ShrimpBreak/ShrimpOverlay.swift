@@ -527,8 +527,8 @@ private final class WaveGroup {
 
     func contains(_ stage: ScreenStage) -> Bool { stages.contains { $0 === stage } }
 
-    /// 파도 앞쪽이 묶음 왼쪽 밖에서 오른쪽 밖까지 가는 데 걸리는 시간.
-    var duration: CGFloat { (maxX - minX + 3 * size) / (Wave.speedRatio * size) }
+    /// 파도 앞쪽이 묶음 왼쪽 끝 조금 앞에서 출발해, 모든 새우가 오른쪽 밖으로 나갈 때까지 걸리는 시간.
+    var duration: CGFloat { (maxX - minX + (Wave.frontStartRatio + Wave.frontEndRatio) * size) / (Wave.speedRatio * size) }
 
     /// x 위치의 모니터 (묶음 바깥이면 가장 가까운 끝 모니터).
     func stage(at x: CGFloat) -> ScreenStage {
@@ -560,7 +560,11 @@ private struct WaveBand {
 @MainActor
 private enum Wave {
     /// 파도 앞쪽이 나아가는 빠르기 (초당 새우 크기 배수). 가로 4K 한 대 ≈ 1.6초.
-    static let speedRatio: CGFloat = 11
+    static let speedRatio: CGFloat = 12.5
+    /// 앞쪽이 묶음 왼쪽 끝보다 얼마나 앞(왼쪽)에서 출발하는지 (새우 크기 배수).
+    static let frontStartRatio: CGFloat = 0.5
+    /// 앞쪽이 묶음 오른쪽 끝을 얼마나 지나서 멈추는지 (새우 크기 배수). 비탈 뒤에 탄 새우까지 다 빠져나가도록.
+    static let frontEndRatio: CGFloat = 4.5
     static let fadeDuration: CGFloat = 0.4
     /// 겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).
     static let laneCount = 5
@@ -572,9 +576,12 @@ private enum Wave {
     private static let wavelength: [CGFloat] = [5.0, 6.5, 4.2, 7.5, 5.8]
     private static let speed: [CGFloat] = [3.2, 2.6, 3.8, 2.2, 3.0]
     private static let phase: [CGFloat] = [0, 2.1, 4.0, 1.1, 5.2]
-    /// 파도 맨 앞이 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 띠일수록 높이 솟는다.
+    /// 앞쪽 비탈 위 마루가 솟은 높이 (띠별, 새우 크기 배수)·폭. 뒤쪽 띠일수록 높이 솟는다.
     private static let crest: [CGFloat] = [0.20, 0.30, 0.40, 0.50, 0.60]
     private static let crestWidth: CGFloat = 1.2
+    /// 앞쪽 비탈 길이 (띠별, 새우 크기 배수). 맨 앞에서는 높이 0(바닥)이고 이만큼 뒤에서 본래 높이가 된다
+    /// → 앞쪽이 수직으로 끊기지 않고 바닥으로 내려앉는다. 띠마다 길이를 달리해 앞쪽도 층층이 겹쳐 보이게.
+    private static let ramp: [CGFloat] = [1.2, 1.6, 2.0, 2.4, 2.8]
     /// 올라탄 새우가 파도 높이로 옮겨 가는 최대 세로 속도 (초당 새우 크기 배수).
     private static let maxSettleSpeedRatio: CGFloat = 8
 
@@ -607,18 +614,29 @@ private enum Wave {
         (groups.map(\.duration).max() ?? 0) + fadeDuration
     }
 
-    /// t 초일 때 파도 앞쪽의 x. 묶음 왼쪽 밖(새우 1마리)에서 오른쪽 밖(새우 2마리)까지.
+    /// t 초일 때 파도 앞쪽의 x.
     static func front(_ group: WaveGroup, t: CGFloat) -> CGFloat {
-        min(group.maxX + 2 * group.size, group.minX - group.size + speedRatio * group.size * max(0, t))
+        min(group.maxX + frontEndRatio * group.size,
+            group.minX - frontStartRatio * group.size + speedRatio * group.size * max(0, t))
     }
 
     /// 띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준).
+    /// 앞쪽에서는 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
     static func y(lane: Int, x: CGFloat, t: CGFloat, front: CGFloat, floor: CGFloat, size: CGFloat) -> CGFloat {
-        var y = floor + base[lane] * size
+        let behind = max(0, front - x)
+        let rampLength = ramp[lane] * size
+        let crestOffset = (behind - 0.9 * rampLength) / (crestWidth * size)
+        let height = base[lane] * size
             + amplitude[lane] * size * sin(2 * .pi * x / (wavelength[lane] * size) - speed[lane] * t + phase[lane])
-        let behind = (front - x) / (crestWidth * size)
-        if behind >= 0 { y += crest[lane] * size * exp(-behind * behind) }
-        return y
+            + crest[lane] * size * exp(-crestOffset * crestOffset)
+        let progress = min(1, behind / rampLength)
+        let envelope = progress * progress * (3 - 2 * progress) // smoothstep: 맨 앞 0 → 비탈 끝 1
+        return floor + height * envelope
+    }
+
+    /// 새우가 앞쪽에서 얼마나 뒤에 타는지 (새우 크기 배수, 음수). 띠의 비탈 위 마루 근처.
+    private static func rideOffsetRatio(lane: Int) -> CGFloat {
+        -ramp[lane] * (0.75 + 0.35 * .random(in: 0...1))
     }
 
     /// 끝나갈 때 띠의 불투명도 (1 → 0). 묶음마다 자기 파도가 다 지나간 뒤 옅어진다.
@@ -638,7 +656,7 @@ private enum Wave {
             abs(y(lane: a, x: centerX, t: t, front: front, floor: floor, size: group.size) - shrimp.y)
                 < abs(y(lane: b, x: centerX, t: t, front: front, floor: floor, size: group.size) - shrimp.y)
         } ?? 0
-        return WaveRide(lane: lane, offsetRatio: -0.3 - 0.6 * .random(in: 0...1),
+        return WaveRide(lane: lane, offsetRatio: rideOffsetRatio(lane: lane),
                         seed: .random(in: 0...(2 * .pi)), group: group)
     }
 

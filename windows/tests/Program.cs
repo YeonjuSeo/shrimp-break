@@ -244,6 +244,14 @@ static class Program
         }
 
         var single = WaveSweep.BuildGroups(new[] { StageGeometry.FromScreen("wide", 0, 2560, 0, 1440, 1.0, 3.6) }, SizeOf)[0];
+        // 앞쪽이 수직으로 끊기지 않도록: 맨 앞은 바닥 높이이고, 바로 뒤도 바닥 근처에서 완만하게 시작한다.
+        var floor = single.Stages[0].Floor;
+        var front = WaveSweep.Front(single, 0.8);
+        var atFront = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => Math.Abs(WaveSweep.WaveY(lane, front, 0.8, front, floor, single.Size) - floor));
+        var justBehind = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => WaveSweep.WaveY(lane, front - 0.1 * single.Size, 0.8, front, floor, single.Size) - floor);
+        Console.WriteLine($"[{name}] 앞쪽 끝 높이 {atFront:F1}px, 앞쪽에서 새우 0.1마리 뒤 높이 {justBehind:F1}px (새우 크기 {single.Size:F0}px)");
+        Check(name, "앞쪽 끝은 바닥 높이 (수직으로 끊기지 않음)", atFront < 0.5, $"{atFront:F1}px");
+        Check(name, "앞쪽 바로 뒤도 바닥 근처에서 완만하게 시작", justBehind < single.Size * 0.1, $"{justBehind:F1}px");
         Check(name, "끝나면 띠가 완전히 투명", WaveSweep.Opacity(single, single.Duration + WaveSweep.FadeDuration) == 0, "");
     }
 
