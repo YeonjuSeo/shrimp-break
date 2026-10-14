@@ -25,6 +25,12 @@ namespace ShrimpBreak
         const double TempuraChance = 0.20;
         /// <summary>기울기를 몇 도 단위로 나눠 그림을 만들어 둘지. 단위를 키울수록 그림 교체가 줄어 가볍다.</summary>
         const int TiltQuantumDegrees = 4;
+        /// <summary>
+        /// 이보다 큰 새우(px)는 그림 한 장이 커서, 기울기별 그림을 다 만들어 두면 메모리 상한을 넘고 새로 그리느라 끊긴다.
+        /// → 튈 때는 기울이지 않고(방향만 바꿈), 파도를 탈 때는 기울기를 더 굵은 단위로 나눈다.
+        /// </summary>
+        const double LargeSpritePixels = 360;
+        const int LargeTiltQuantumDegrees = 8;
         /// <summary>튀는 동안 최대 기울기 (Mac 버전 0.18rad ≈ 10.3°).</summary>
         const double MaxTiltDegrees = 10.3;
         /// <summary>사라질 때 페이드 프레임 수 (약 0.2초).</summary>
@@ -199,11 +205,13 @@ namespace ShrimpBreak
             var body = sprite.Body;
             // 진행 방향을 바라보고, 오를 땐 고개를 들고 떨어질 땐 숙인다. 파도를 탈 땐 기우뚱.
             var facing = sprite.Ride != null || body.Vx >= 0 ? 1 : -1;
-            var tiltDegrees = sprite.Ride != null
-                ? sprite.Ride.Tilt * 180 / Math.PI
+            var isLarge = body.Size > LargeSpritePixels;
+            var tiltDegrees = sprite.Ride != null ? sprite.Ride.Tilt * 180 / Math.PI
+                : isLarge ? 0
                 : ShrimpPhysics.Lift(body) * MaxTiltDegrees * facing;
+            var quantum = isLarge ? LargeTiltQuantumDegrees : TiltQuantumDegrees;
             var key = new SpriteKey(sprite.IsTempura, facing,
-                                    (int)(Math.Round(tiltDegrees / TiltQuantumDegrees) * TiltQuantumDegrees), (int)Math.Round(body.Size));
+                                    (int)(Math.Round(tiltDegrees / quantum) * quantum), (int)Math.Round(body.Size));
             var bitmap = sprites.Get(key);
             // 그림의 "바닥 중앙"이 새우 몸의 바닥 중앙에 오도록. 화면 y 는 아래가 + 라서 부호를 뒤집는다.
             sprite.TopLeft = new Point((int)Math.Round(body.X + body.Size / 2 - bitmap.Side / 2.0),

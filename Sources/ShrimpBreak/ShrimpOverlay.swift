@@ -70,9 +70,12 @@ final class ShrimpOverlay: NSObject {
         guard shrimps.count < Self.maxShrimps,
               let home = stageUnderMouse() ?? stages.first else { return }
 
-        // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위.
+        // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위. 작은 새우가 더 자주 나오도록
+        // 0~1 난수를 제곱해 쓴다 (절반은 범위의 아래 1/4 안).
         let minSize = Self.shrimpSizeMillimeters * home.pointsPerMillimeter
-        let size = CGFloat.random(in: minSize...max(minSize, home.frame.height * Self.maxSizeScreenRatio))
+        let maxSize = max(minSize, home.frame.height * Self.maxSizeScreenRatio)
+        let u = CGFloat.random(in: 0...1)
+        let size = minSize + (maxSize - minSize) * u * u
         let isTempura = Double.random(in: 0..<1) < 0.20
         // 높이 제각각으로 통통. 바닥 아래(-size)에서 솟아오른다.
         let peak = CGFloat.random(in: 140...360)

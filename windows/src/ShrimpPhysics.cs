@@ -83,10 +83,13 @@ namespace ShrimpBreak
 
         public static ShrimpBody Spawn(StageGeometry home, Random random)
         {
-            // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위.
+            // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위. 작은 새우가 더 자주 나오도록
+            // 0~1 난수를 제곱해 쓴다 (절반은 범위의 아래 1/4 안, 가장 큰 단계는 6% 남짓).
             var minSize = ShrimpSizeMillimeters * home.PixelsPerMillimeter;
             var maxSize = Math.Max(minSize, (home.Top - home.Floor) * MaxSizeScreenRatio);
-            return Spawn(home, random, Lerp(minSize, maxSize, random.Next(SizeSteps) / (double)(SizeSteps - 1)));
+            var u = random.NextDouble();
+            var step = Math.Min(SizeSteps - 1, (int)(u * u * SizeSteps));
+            return Spawn(home, random, Lerp(minSize, maxSize, step / (double)(SizeSteps - 1)));
         }
 
         public static ShrimpBody Spawn(StageGeometry home, Random random, double size)

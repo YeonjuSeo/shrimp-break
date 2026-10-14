@@ -32,6 +32,7 @@ static class Program
         var gapB = StageGeometry.FromScreen("gapB", 2000, 3920, 0, 1040, 1.0, 3.6);
         RunScenario("모니터 사이 틈", new[] { gapA, gapB }, expectCrossing: false);
 
+        RunSizeDistributionTest();
         RunCollisionTests();
         RunWaveSweepTests();
 
@@ -94,6 +95,23 @@ static class Program
         {
             Check(name, "모니터를 넘지 않음", crossings.Count == 0, crossingText);
         }
+    }
+
+    /// <summary>새우 크기: 범위 안이고, 작은 새우가 더 자주 나온다.</summary>
+    static void RunSizeDistributionTest()
+    {
+        const string name = "새우 크기";
+        var stage = StageGeometry.FromScreen("4k", 0, 3840, 0, 2100, 1.5, 6.43);
+        var random = new Random(3);
+        var smallest = ShrimpPhysics.ShrimpSizeMillimeters * stage.PixelsPerMillimeter;
+        var largest = (stage.Top - stage.Floor) * ShrimpPhysics.MaxSizeScreenRatio;
+        var sizes = Enumerable.Range(0, 10000).Select(_ => ShrimpPhysics.Spawn(stage, random).Size).ToList();
+        var lowerHalf = sizes.Count(s => s <= (smallest + largest) / 2) / (double)sizes.Count;
+        var largestShare = sizes.Count(s => s >= largest - 0.5) / (double)sizes.Count;
+        Console.WriteLine($"[{name}] {smallest:F0}~{largest:F0}px, 아래 절반 크기 {lowerHalf:P0}, 가장 큰 단계 {largestShare:P0}");
+        Check(name, "범위 안", sizes.All(s => s >= smallest - 0.5 && s <= largest + 0.5), "");
+        Check(name, "작은 새우가 더 자주 (아래 절반 크기 60% 이상)", lowerHalf >= 0.6, $"{lowerHalf:P0}");
+        Check(name, "큰 새우도 가끔 나옴 (가장 큰 단계 3% 이상)", largestShare >= 0.03, $"{largestShare:P0}");
     }
 
     /// <summary>새우끼리 충돌: 정면충돌·겹침 해소·최소 속도·여러 마리 오래 돌려도 겹치지 않음.</summary>
