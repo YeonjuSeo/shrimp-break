@@ -260,20 +260,24 @@ static class Program
         var front = WaveSweep.Front(single, 0.8);
         var atFront = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => Math.Abs(WaveSweep.WaveY(lane, front, 0.8, single, floor) - floor));
         var justBehind = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => WaveSweep.WaveY(lane, front - 0.1 * single.Size, 0.8, single, floor) - floor);
-        // 빠져나갈 때 뒤꼬리도 수직으로 끊기지 않고 바닥으로 내려앉아야 한다.
-        var tailTime = WaveSweep.DrainStart(single) + 0.5;
-        var tail = WaveSweep.Tail(single, tailTime);
-        var atTail = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => Math.Abs(WaveSweep.WaveY(lane, tail, tailTime, single, floor) - floor));
-        var justAhead = Enumerable.Range(0, WaveSweep.LaneCount).Max(lane => WaveSweep.WaveY(lane, tail + 0.1 * single.Size, tailTime, single, floor) - floor);
-        Console.WriteLine($"[{name}] 뒤꼬리 끝 높이 {atTail:F1}px, 뒤꼬리에서 새우 0.1마리 앞 높이 {justAhead:F1}px");
-        Check(name, "뒤꼬리 끝도 바닥 높이", atTail < 0.5, $"{atTail:F1}px");
-        Check(name, "뒤꼬리 바로 앞도 바닥 근처에서 완만하게 시작", justAhead < single.Size * 0.1, $"{justAhead:F1}px");
+        // 바닥(높이 0)에서 시작하는 것은 오른쪽 앞쪽뿐: 앞쪽이 지나간 뒤 왼쪽 끝은 빠지기 시작할 때까지 본래 높이로 차 있어야 한다.
+        var leftFullFrom = (single.MinX + 3 * single.Size - WaveSweep.Front(single, 0)) / (WaveSweep.SpeedRatio * single.Size);
+        var leftLowest = double.MaxValue;
+        for (var t = leftFullFrom; t <= WaveSweep.DrainStart(single) + 0.1; t += 0.01)
+            for (var lane = 0; lane < WaveSweep.LaneCount; lane++)
+                leftLowest = Math.Min(leftLowest, WaveSweep.WaveY(lane, single.MinX, t, single, floor) - floor);
+        Console.WriteLine($"[{name}] 왼쪽 끝 가장 낮은 띠 높이 {leftLowest:F1}px");
+        Check(name, "왼쪽 끝은 바닥으로 내려앉지 않고 물이 차 있음", leftLowest > 0.03 * single.Size, $"{leftLowest:F1}px");
+        // 끝날 때는 수위가 바닥까지 가라앉아 있어야 한다.
+        var leftover = 0.0;
+        for (var x = single.MinX; x <= single.MaxX; x += 10)
+            for (var lane = 0; lane < WaveSweep.LaneCount; lane++)
+                leftover = Math.Max(leftover, Math.Abs(WaveSweep.WaveY(lane, x, single.Duration, single, floor) - floor));
+        Check(name, "끝나면 수위가 바닥까지 가라앉음", leftover < 0.5, $"{leftover:F1}px");
         Console.WriteLine($"[{name}] 앞쪽 끝 높이 {atFront:F1}px, 앞쪽에서 새우 0.1마리 뒤 높이 {justBehind:F1}px (새우 크기 {single.Size:F0}px)");
         Check(name, "앞쪽 끝은 바닥 높이 (수직으로 끊기지 않음)", atFront < 0.5, $"{atFront:F1}px");
         Check(name, "앞쪽 바로 뒤도 바닥 근처에서 완만하게 시작", justBehind < single.Size * 0.1, $"{justBehind:F1}px");
         Check(name, "끝나면 띠가 완전히 투명", WaveSweep.Opacity(single, single.Duration + WaveSweep.FadeDuration) == 0, "");
-        Check(name, "끝날 때 뒤꼬리까지 묶음 오른쪽 밖", WaveSweep.Tail(single, single.Duration) >= single.MaxX + WaveSweep.TailRampRatio * single.Size - 0.5,
-              $"{WaveSweep.Tail(single, single.Duration):F0}");
     }
 
     static void Check(string scenario, string what, bool ok, string detail)

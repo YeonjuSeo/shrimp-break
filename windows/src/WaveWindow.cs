@@ -81,7 +81,7 @@ namespace ShrimpBreak
         public void Draw(double t)
         {
             var front = WaveSweep.Front(group, t);
-            var begin = Math.Max(WaveSweep.Tail(group, t), stage.MinX);
+            var begin = stage.MinX;
             var end = Math.Min(front, stage.MaxX);
 
             using (var g = Graphics.FromImage(canvas))

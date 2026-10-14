@@ -294,8 +294,9 @@ namespace ShrimpBreak
     ///
     /// 1) 밀려들기: 파도 앞쪽이 빠르게 왼쪽에서 오른쪽으로 덮어 온다. 물 전체도 천천히 오른쪽으로 흐른다.
     /// 2) 올라타기: 앞쪽이 닿으면 새우는 그 자리에서 띠 위로 들어 올려져, 물과 함께 흐르며 띠의 굴곡을 따라 울렁인다.
-    /// 3) 빠져나가기: 앞쪽이 묶음 오른쪽 끝에 닿으면 물 전체가 점점 빨라지며 오른쪽으로 빠져나간다 (새우도 함께).
-    /// 앞쪽·뒤꼬리 모두 바닥으로 내려앉는 비탈이라 수직으로 끊겨 보이지 않는다.
+    /// 3) 빠져나가기: 앞쪽이 묶음 오른쪽 끝에 닿으면 물 전체가 점점 빨라지며 오른쪽으로 빠져나가고 (새우도 함께),
+    ///    새우가 다 나갈 즈음 수위가 바닥까지 가라앉는다.
+    /// 바닥(높이 0)에서 시작하는 것은 오른쪽 앞쪽뿐이다. 왼쪽은 화면 끝까지 본래 높이로 물이 차 있다.
     /// </summary>
     public static class WaveSweep
     {
@@ -308,10 +309,9 @@ namespace ShrimpBreak
         public const double DrainRampSeconds = 0.4;
         /// <summary>앞쪽이 묶음 왼쪽 끝보다 얼마나 앞(왼쪽)에서 출발하는지 (새우 크기 배수).</summary>
         public const double FrontStartRatio = 0.5;
-        /// <summary>뒤꼬리가 묶음 왼쪽 끝보다 얼마나 뒤에서 출발하는지, 뒤꼬리 비탈 길이 (새우 크기 배수).</summary>
-        public const double TailStartRatio = 3;
-        public const double TailRampRatio = 3;
-        /// <summary>물이 다 빠져나간 뒤 남은 띠를 지우는 시간 (이미 화면 밖이라 짧게).</summary>
+        /// <summary>빠져나갈 때 수위가 바닥까지 가라앉는 데 걸리는 시간. 새우가 묶음 밖으로 다 나가는 시각에 맞춰 끝난다.</summary>
+        public const double SubsideSeconds = 0.5;
+        /// <summary>수위가 다 가라앉은 뒤 남은 띠를 지우는 시간 (높이 0이라 짧게).</summary>
         public const double FadeDuration = 0.1;
         /// <summary>겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).</summary>
         public const int LaneCount = 5;
@@ -400,29 +400,37 @@ namespace ShrimpBreak
             return Math.Max(flooding, withWater);
         }
 
-        /// <summary>t 초일 때 파도 뒤꼬리의 x (물과 함께 흘러간다).</summary>
-        public static double Tail(WaveGroup group, double t) => group.MinX - TailStartRatio * group.Size + Shift(group, t);
-
-        /// <summary>뒤꼬리 비탈까지 묶음 오른쪽 밖으로 다 나가는 시각 (Shift 를 거꾸로 푼 값).</summary>
-        public static double EndTime(WaveGroup group)
+        /// <summary>올라탄 새우가 모두 묶음 오른쪽 밖으로 나가는 시각 (Shift 를 거꾸로 푼 값).</summary>
+        /// <remarks>새우는 묶음 왼쪽 끝 이후에서 빠지기 전에 올라타므로, 빠지기 시작한 뒤 물이 (묶음 폭 + 새우 1마리)만큼 흐르면 다 나간다.</remarks>
+        static double ExitTime(WaveGroup group)
         {
-            var distance = group.MaxX - group.MinX + (TailStartRatio + TailRampRatio) * group.Size;
-            var t1 = DrainStart(group) + DrainRampSeconds;
-            // t > t1 구간: Shift = V(a·t + (b-a)(ramp/2 + t - t1)) = distance 를 t 에 대해 푼다.
-            return (distance / FrontSpeed(group) + (FlowRatioWhileDraining - FlowRatioWhileFlooding) * (t1 - DrainRampSeconds / 2))
-                   / FlowRatioWhileDraining;
+            var distance = group.MaxX - group.MinX + group.Size;
+            var t0 = DrainStart(group);
+            var t1 = t0 + DrainRampSeconds;
+            // t > t1 구간: Shift(t) - Shift(t0) = V(a(t - t0) + (b-a)(ramp/2 + t - t1)) = distance 를 t 에 대해 푼다.
+            var t = (distance / FrontSpeed(group) + FlowRatioWhileFlooding * t0
+                     + (FlowRatioWhileDraining - FlowRatioWhileFlooding) * (t1 - DrainRampSeconds / 2)) / FlowRatioWhileDraining;
+            return Math.Max(t, t1); // 빨라지는 도중에 나간다면 t1 로 넉넉히
         }
+
+        /// <summary>수위가 가라앉기 시작하는 시각.</summary>
+        static double SubsideStart(WaveGroup group) => Math.Max(DrainStart(group), ExitTime(group) - SubsideSeconds);
+
+        /// <summary>수위가 바닥까지 다 가라앉는 시각 = 파도가 끝나는 시각.</summary>
+        public static double EndTime(WaveGroup group) => SubsideStart(group) + SubsideSeconds;
+
+        /// <summary>t 초일 때 수위 (1 → 0). 빠져나가는 끝 무렵 바닥까지 가라앉는다.</summary>
+        public static double Level(WaveGroup group, double t) => 1 - SmoothStep((t - SubsideStart(group)) / SubsideSeconds);
 
         /// <summary>
         /// 띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준). 물결 모양은 물과 함께 흘러간다.
-        /// 앞쪽·뒤꼬리에서는 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
+        /// 오른쪽 앞쪽에서만 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
         /// </summary>
         public static double WaveY(int lane, double x, double t, WaveGroup group, double floor)
         {
             var size = group.Size;
             var front = Front(group, t);
-            var tail = Tail(group, t);
-            if (x > front || x < tail) return floor;
+            if (x > front) return floor;
 
             var behind = front - x;
             var ramp = LaneRamp[lane] * size;
@@ -435,7 +443,7 @@ namespace ShrimpBreak
                          + amplitude * RippleAmplitudeRatio
                            * Math.Sin(2 * Math.PI * flowing / (wavelength * RippleWavelengthRatio) + 1.6 * LaneSpeed[lane] * t + 2 * LanePhase[lane])
                          + LaneCrest[lane] * size * Math.Exp(-crestOffset * crestOffset);
-            return floor + height * SmoothStep(behind / ramp) * SmoothStep((x - tail) / (TailRampRatio * size));
+            return floor + height * SmoothStep(behind / ramp) * Level(group, t);
         }
 
         static double SmoothStep(double value)

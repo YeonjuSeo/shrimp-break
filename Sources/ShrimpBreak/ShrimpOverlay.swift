@@ -243,10 +243,10 @@ final class ShrimpOverlay: NSObject {
         for stage in stages {
             guard let bands = waveLayers[stage.id], let group = waveGroups.first(where: { $0.contains(stage) }) else { continue }
             let opacity = Float(Wave.opacity(group, t: t))
-            let begin = max(Wave.tail(group, t: t), stage.frame.minX)
+            let begin = stage.frame.minX
             let end = min(Wave.front(group, t: t), stage.frame.maxX)
             for band in bands {
-                // 물결 모양·앞쪽·뒤꼬리는 묶음 전체로 이어지고, 높이는 이 모니터 바닥에 붙는다.
+                // 물결 모양·앞쪽은 묶음 전체로 이어지고, 높이는 이 모니터 바닥에 붙는다.
                 let line = CGMutablePath()
                 var x = begin
                 var lastX = x
@@ -559,8 +559,9 @@ private struct WaveBand {
 ///
 /// 1) 밀려들기: 파도 앞쪽이 빠르게 왼쪽에서 오른쪽으로 덮어 온다. 물 전체도 천천히 오른쪽으로 흐른다.
 /// 2) 올라타기: 앞쪽이 닿으면 새우는 그 자리에서 띠 위로 들어 올려져, 물과 함께 흐르며 띠의 굴곡을 따라 울렁인다.
-/// 3) 빠져나가기: 앞쪽이 묶음 오른쪽 끝에 닿으면 물 전체가 점점 빨라지며 오른쪽으로 빠져나간다 (새우도 함께).
-/// 앞쪽·뒤꼬리 모두 바닥으로 내려앉는 비탈이라 수직으로 끊겨 보이지 않는다.
+/// 3) 빠져나가기: 앞쪽이 묶음 오른쪽 끝에 닿으면 물 전체가 점점 빨라지며 오른쪽으로 빠져나가고 (새우도 함께),
+///    새우가 다 나갈 즈음 수위가 바닥까지 가라앉는다.
+/// 바닥(높이 0)에서 시작하는 것은 오른쪽 앞쪽뿐이다. 왼쪽은 화면 끝까지 본래 높이로 물이 차 있다.
 @MainActor
 private enum Wave {
     /// 파도 앞쪽이 밀려드는 빠르기 (초당 새우 크기 배수).
@@ -572,10 +573,9 @@ private enum Wave {
     static let drainRampSeconds: CGFloat = 0.4
     /// 앞쪽이 묶음 왼쪽 끝보다 얼마나 앞(왼쪽)에서 출발하는지 (새우 크기 배수).
     static let frontStartRatio: CGFloat = 0.5
-    /// 뒤꼬리가 묶음 왼쪽 끝보다 얼마나 뒤에서 출발하는지, 뒤꼬리 비탈 길이 (새우 크기 배수).
-    static let tailStartRatio: CGFloat = 3
-    static let tailRampRatio: CGFloat = 3
-    /// 물이 다 빠져나간 뒤 남은 띠를 지우는 시간 (이미 화면 밖이라 짧게).
+    /// 빠져나갈 때 수위가 바닥까지 가라앉는 데 걸리는 시간. 새우가 묶음 밖으로 다 나가는 시각에 맞춰 끝난다.
+    static let subsideSeconds: CGFloat = 0.5
+    /// 수위가 다 가라앉은 뒤 남은 띠를 지우는 시간 (높이 0이라 짧게).
     static let fadeDuration: CGFloat = 0.1
     /// 겹겹이 쌓인 물결 띠 수 (0 = 가장 낮고 앞에 있는 띠).
     static let laneCount = 5
@@ -655,26 +655,37 @@ private enum Wave {
         return max(flooding, withWater)
     }
 
-    /// t 초일 때 파도 뒤꼬리의 x (물과 함께 흘러간다).
-    static func tail(_ group: WaveGroup, t: CGFloat) -> CGFloat {
-        group.minX - tailStartRatio * group.size + shift(group, t: t)
+    /// 올라탄 새우가 모두 묶음 오른쪽 밖으로 나가는 시각 (shift 를 거꾸로 푼 값).
+    /// 새우는 묶음 왼쪽 끝 이후에서 빠지기 전에 올라타므로, 빠지기 시작한 뒤 물이 (묶음 폭 + 새우 1마리)만큼 흐르면 다 나간다.
+    private static func exitTime(_ group: WaveGroup) -> CGFloat {
+        let distance = group.maxX - group.minX + group.size
+        let t0 = drainStart(group)
+        let t1 = t0 + drainRampSeconds
+        // t > t1 구간: shift(t) - shift(t0) = V(a(t - t0) + (b-a)(ramp/2 + t - t1)) = distance 를 t 에 대해 푼다.
+        let t = (distance / frontSpeed(group) + flowRatioWhileFlooding * t0
+            + (flowRatioWhileDraining - flowRatioWhileFlooding) * (t1 - drainRampSeconds / 2)) / flowRatioWhileDraining
+        return max(t, t1) // 빨라지는 도중에 나간다면 t1 로 넉넉히
     }
 
-    /// 뒤꼬리 비탈까지 묶음 오른쪽 밖으로 다 나가는 시각 (shift 를 거꾸로 푼 값).
-    static func endTime(_ group: WaveGroup) -> CGFloat {
-        let distance = group.maxX - group.minX + (tailStartRatio + tailRampRatio) * group.size
-        let t1 = drainStart(group) + drainRampSeconds
-        return (distance / frontSpeed(group) + (flowRatioWhileDraining - flowRatioWhileFlooding) * (t1 - drainRampSeconds / 2))
-            / flowRatioWhileDraining
+    /// 수위가 가라앉기 시작하는 시각.
+    private static func subsideStart(_ group: WaveGroup) -> CGFloat {
+        max(drainStart(group), exitTime(group) - subsideSeconds)
+    }
+
+    /// 수위가 바닥까지 다 가라앉는 시각 = 파도가 끝나는 시각.
+    static func endTime(_ group: WaveGroup) -> CGFloat { subsideStart(group) + subsideSeconds }
+
+    /// t 초일 때 수위 (1 → 0). 빠져나가는 끝 무렵 바닥까지 가라앉는다.
+    static func level(_ group: WaveGroup, t: CGFloat) -> CGFloat {
+        1 - smoothStep((t - subsideStart(group)) / subsideSeconds)
     }
 
     /// 띠 lane 의 x 위치 높이 (그 자리 모니터의 바닥 floor 기준). 물결 모양은 물과 함께 흘러간다.
-    /// 앞쪽·뒤꼬리에서는 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
+    /// 오른쪽 앞쪽에서만 바닥(floor)에서 시작해 비탈을 따라 부드럽게 올라간다.
     static func y(lane: Int, x: CGFloat, t: CGFloat, group: WaveGroup, floor: CGFloat) -> CGFloat {
         let size = group.size
         let front = front(group, t: t)
-        let tail = tail(group, t: t)
-        guard x <= front, x >= tail else { return floor }
+        guard x <= front else { return floor }
 
         let behind = front - x
         let rampLength = ramp[lane] * size
@@ -687,7 +698,7 @@ private enum Wave {
             + laneAmplitude * rippleAmplitudeRatio
                 * sin(2 * .pi * flowing / (laneWavelength * rippleWavelengthRatio) + 1.6 * speed[lane] * t + 2 * phase[lane])
             + crest[lane] * size * exp(-crestOffset * crestOffset)
-        return floor + height * smoothStep(behind / rampLength) * smoothStep((x - tail) / (tailRampRatio * size))
+        return floor + height * smoothStep(behind / rampLength) * level(group, t: t)
     }
 
     private static func smoothStep(_ value: CGFloat) -> CGFloat {
