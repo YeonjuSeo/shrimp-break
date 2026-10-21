@@ -40,6 +40,9 @@ final class ShrimpOverlay: NSObject {
     private static let shrimpSizeMillimeters: CGFloat = 50
     /// 가장 큰 새우 크기 = 나온 모니터 높이의 40%.
     private static let maxSizeScreenRatio: CGFloat = 0.4
+    /// 크기 범위(5cm ~ 화면 높이 40%)를 4등분한 구간별 확률, 작은 쪽부터.
+    /// 2구간은 나오지 않게 해서 큰 새우가 나오면 크기 차이가 또렷하게 보이도록.
+    private static let sizeRangeWeights: [CGFloat] = [0.85, 0, 0.10, 0.05]
     private static let maxShrimps = 40
     /// 낮을수록 같은 높이를 더 천천히 오르내린다 (통통 튀는 리듬).
     private static let gravity: CGFloat = 1664 // pt/s² — 처음 값(2600)의 0.8² → 같은 높이를 0.8배 속도로
@@ -70,12 +73,10 @@ final class ShrimpOverlay: NSObject {
         guard shrimps.count < Self.maxShrimps,
               let home = stageUnderMouse() ?? stages.first else { return }
 
-        // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위. 작은 새우가 더 자주 나오도록
-        // 0~1 난수를 제곱해 쓴다 (절반은 범위의 아래 1/4 안).
+        // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위.
         let minSize = Self.shrimpSizeMillimeters * home.pointsPerMillimeter
         let maxSize = max(minSize, home.frame.height * Self.maxSizeScreenRatio)
-        let u = CGFloat.random(in: 0...1)
-        let size = minSize + (maxSize - minSize) * u * u
+        let size = minSize + (maxSize - minSize) * Self.randomSizeFraction()
         let isTempura = Double.random(in: 0..<1) < 0.20
         // 높이 제각각으로 통통. 바닥 아래(-size)에서 솟아오른다.
         let peak = CGFloat.random(in: 140...360)
@@ -93,6 +94,21 @@ final class ShrimpOverlay: NSObject {
         shrimps.append(shrimp)
         render()
         startAnimating()
+    }
+
+    /// 크기 범위 안의 위치(0 = 가장 작은 크기, 1 = 가장 큰 크기).
+    /// 구간을 sizeRangeWeights 확률로 고른 뒤, 구간 안에서는 작은 쪽이 조금 더 자주 나오게 (0~1 난수 제곱 분포를 그 구간으로 자른 것).
+    private static func randomSizeFraction() -> CGFloat {
+        var pick = CGFloat.random(in: 0..<1)
+        var range = sizeRangeWeights.count - 1
+        for (index, weight) in sizeRangeWeights.enumerated() {
+            if pick < weight { range = index; break }
+            pick -= weight
+        }
+        let low = CGFloat(range) / CGFloat(sizeRangeWeights.count)
+        let high = CGFloat(range + 1) / CGFloat(sizeRangeWeights.count)
+        let root = low.squareRoot() + CGFloat.random(in: 0...1) * (high.squareRoot() - low.squareRoot())
+        return root * root
     }
 
     /// 살짝 커지며 사라지는 효과 후 정리.

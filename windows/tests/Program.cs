@@ -106,12 +106,21 @@ static class Program
         var smallest = ShrimpPhysics.ShrimpSizeMillimeters * stage.PixelsPerMillimeter;
         var largest = (stage.Top - stage.Floor) * ShrimpPhysics.MaxSizeScreenRatio;
         var sizes = Enumerable.Range(0, 10000).Select(_ => ShrimpPhysics.Spawn(stage, random).Size).ToList();
-        var lowerHalf = sizes.Count(s => s <= (smallest + largest) / 2) / (double)sizes.Count;
+        // 크기 범위를 4등분한 구간별 비율
+        double Share(double from, double to) => sizes.Count(s =>
+        {
+            var fraction = (s - smallest) / (largest - smallest);
+            return fraction >= from - 1e-9 && fraction < to - 1e-9;
+        }) / (double)sizes.Count;
+        var quarters = new[] { Share(0, 0.25), Share(0.25, 0.5), Share(0.5, 0.75), Share(0.75, 1.01) };
         var largestShare = sizes.Count(s => s >= largest - 0.5) / (double)sizes.Count;
-        Console.WriteLine($"[{name}] {smallest:F0}~{largest:F0}px, 아래 절반 크기 {lowerHalf:P0}, 가장 큰 단계 {largestShare:P0}");
+        Console.WriteLine($"[{name}] {smallest:F0}~{largest:F0}px, 구간별 " +
+                          string.Join(" / ", quarters.Select(q => q.ToString("P0"))) + $", 가장 큰 단계 {largestShare:P0}");
         Check(name, "범위 안", sizes.All(s => s >= smallest - 0.5 && s <= largest + 0.5), "");
-        Check(name, "작은 새우가 더 자주 (아래 절반 크기 60% 이상)", lowerHalf >= 0.6, $"{lowerHalf:P0}");
-        Check(name, "큰 새우도 가끔 나옴 (가장 큰 단계 3% 이상)", largestShare >= 0.03, $"{largestShare:P0}");
+        // 목표: 85% / 0% / 10% / 5% (±1.5%p)
+        for (var i = 0; i < 4; i++)
+            Check(name, $"{i + 1}구간 비율이 {ShrimpPhysics.SizeRangeWeights[i]:P0} 근처",
+                  Math.Abs(quarters[i] - ShrimpPhysics.SizeRangeWeights[i]) <= 0.015, $"{quarters[i]:P1}");
     }
 
     /// <summary>새우끼리 충돌: 정면충돌·겹침 해소·최소 속도·여러 마리 오래 돌려도 겹치지 않음.</summary>
@@ -246,20 +255,38 @@ static class Program
             var total = WaveSweep.TotalDuration(groups);
             var frontArrival = groups.Min(WaveSweep.FrontArrival);
             double? crowdedRatio = null;
+            double? spacingKept = null;
+            var pickedAt = new Dictionary<ShrimpBody, double>(); // 올라탄 순간의 몸 중심 x
             for (var t = 0.0; t <= total; t += Dt)
             {
-                // 앞쪽이 오른쪽 끝에 닿을 때: 새우들이 파도 앞쪽 끝에 몰려 있지 않고 곳곳에 흩어져 타고 있어야 한다.
+                // 앞쪽이 오른쪽 끝에 닿을 때 상태를 잰다.
                 if (crowdedRatio == null && t >= frontArrival)
                 {
+                    // 참고용: 앞쪽 끝 근처에 있는 새우 비율. 원래 오른쪽 끝 가까이 있던 새우는 늘 여기 들어가서 크기·배치에 따라 흔들린다.
                     crowdedRatio = shrimps.Count(s => rides.TryGetValue(s, out var r)
                                                       && WaveSweep.Front(r.Group, t) - (s.X + s.Size / 2) < 1.5 * r.Group.Size)
                                    / (double)shrimps.Count;
+                    // 몰림 판정: 같은 파도를 탄 새우들이 올라탄 자리의 간격을 얼마나 유지하는지 (가장 왼쪽~오른쪽 폭 비율).
+                    // 앞쪽 끝에 밀려 쌓이면 0 에 가까워진다. 지금 속도 비율이면 이론상 1 - 물 속도/앞쪽 속도 ≈ 0.61.
+                    spacingKept = rides.GroupBy(pair => pair.Value.Group)
+                        .Where(g => g.Count() >= 2)
+                        .Select(g =>
+                        {
+                            var before = g.Max(pair => pickedAt[pair.Key]) - g.Min(pair => pickedAt[pair.Key]);
+                            var after = g.Max(pair => pair.Key.X + pair.Key.Size / 2) - g.Min(pair => pair.Key.X + pair.Key.Size / 2);
+                            return before > 1 ? after / before : 1;
+                        })
+                        .DefaultIfEmpty(1).Min();
                 }
                 foreach (var s in shrimps)
                 {
                     if (!rides.TryGetValue(s, out var ride))
                     {
-                        if (WaveSweep.TryPickUp(s, WaveSweep.GroupOf(groups, s.Home), t, random, out ride)) rides[s] = ride;
+                        if (WaveSweep.TryPickUp(s, WaveSweep.GroupOf(groups, s.Home), t, random, out ride))
+                        {
+                            rides[s] = ride;
+                            pickedAt[s] = s.X + s.Size / 2;
+                        }
                         else
                         {
                             ShrimpPhysics.Move(s, Dt, stages);
@@ -283,8 +310,8 @@ static class Program
             Check(name, $"{label}: 올라탄 뒤 왼쪽으로 끌려가지 않음", movedLeft == 0, $"{movedLeft}번");
             Check(name, $"{label}: 순간이동 없음 (한 프레임 세로 이동 < 자기 크기의 1/3)", maxJumpRatio < 1.0 / 3, $"{maxJumpRatio:P0}");
             Check(name, $"{label}: 다른 묶음(위아래 모니터)의 파도를 타지 않음", switchedGroup == 0, $"{switchedGroup}마리");
-            Console.WriteLine($"   앞쪽이 끝에 닿을 때 파도 앞쪽 끝(가장 작은 새우 1.5마리 안)에 몰린 새우 비율 {crowdedRatio:P0}");
-            Check(name, $"{label}: 새우들이 파도 앞쪽 끝에 몰리지 않음 (25% 미만)", crowdedRatio < 0.25, $"{crowdedRatio:P0}");
+            Console.WriteLine($"   앞쪽이 끝에 닿을 때: 올라탄 자리 간격 유지 {spacingKept:P0}, 앞쪽 끝 근처 새우 {crowdedRatio:P0} (참고)");
+            Check(name, $"{label}: 새우들이 파도 앞쪽 끝에 몰리지 않음 (올라탄 자리 간격 50% 이상 유지)", spacingKept >= 0.5, $"{spacingKept:P0}");
         }
 
         var single = WaveSweep.BuildGroups(new[] { StageGeometry.FromScreen("wide", 0, 2560, 0, 1440, 1.0, 3.6) }, SizeOf)[0];

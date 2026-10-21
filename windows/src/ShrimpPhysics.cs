@@ -71,6 +71,11 @@ namespace ShrimpBreak
         /// (Mac 은 그림 하나를 확대해 쓰므로 단계 없이 고른다).
         /// </summary>
         public const int SizeSteps = 8;
+        /// <summary>
+        /// 크기 범위(5cm ~ 화면 높이 40%)를 4등분한 구간별 확률, 작은 쪽부터 (Mac 과 같은 값).
+        /// 2구간은 나오지 않게 해서 큰 새우가 나오면 크기 차이가 또렷하게 보이도록.
+        /// </summary>
+        public static readonly double[] SizeRangeWeights = { 0.85, 0, 0.10, 0.05 };
         public const double GravityPoints = 1664;
         public const double MinSpeedPoints = 128;
         public const double MaxSpeedPoints = 256;
@@ -83,14 +88,31 @@ namespace ShrimpBreak
 
         public static ShrimpBody Spawn(StageGeometry home, Random random)
         {
-            // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위. 작은 새우가 더 자주 나오도록
-            // 0~1 난수를 제곱해 쓴다 (절반은 범위의 아래 1/4 안, 가장 큰 단계는 6% 남짓).
+            // 크기는 가장 작은 크기(5cm) ~ 모니터 높이의 40% 사이에서 무작위.
+            // 구간을 SizeRangeWeights 확률로 고른 뒤, 구간 안에서는 작은 쪽이 조금 더 자주 나오게 고르고 (Mac 과 같은 규칙),
+            // 그 구간 안에 있는 크기 단계 중 가장 가까운 것으로 맞춘다 → 구간별 비율이 Mac 과 같다.
             var minSize = ShrimpSizeMillimeters * home.PixelsPerMillimeter;
             var maxSize = Math.Max(minSize, (home.Top - home.Floor) * MaxSizeScreenRatio);
-            var u = random.NextDouble();
-            var step = Math.Min(SizeSteps - 1, (int)(u * u * SizeSteps));
+            var pick = random.NextDouble();
+            var range = SizeRangeWeights.Length - 1;
+            for (var i = 0; i < SizeRangeWeights.Length; i++)
+            {
+                if (pick < SizeRangeWeights[i]) { range = i; break; }
+                pick -= SizeRangeWeights[i];
+            }
+            var low = range / (double)SizeRangeWeights.Length;
+            var high = (range + 1) / (double)SizeRangeWeights.Length;
+            var root = Math.Sqrt(low) + random.NextDouble() * (Math.Sqrt(high) - Math.Sqrt(low));
+            var fraction = root * root;
+            var step = Enumerable.Range(0, SizeSteps)
+                .Where(k => InRange(k / (double)(SizeSteps - 1), low, high, isLast: range == SizeRangeWeights.Length - 1))
+                .OrderBy(k => Math.Abs(k / (double)(SizeSteps - 1) - fraction))
+                .First();
             return Spawn(home, random, Lerp(minSize, maxSize, step / (double)(SizeSteps - 1)));
         }
+
+        static bool InRange(double fraction, double low, double high, bool isLast)
+            => fraction >= low && (fraction < high || isLast && fraction <= high);
 
         public static ShrimpBody Spawn(StageGeometry home, Random random, double size)
         {
