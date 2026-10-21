@@ -54,8 +54,11 @@ final class BreakScheduler {
 
     private(set) var isUserPaused = false
     private(set) var isAway = false
-    /// 서기·움직이기 차례 중에 자리를 비움 (무시하고 타이머는 계속). 이 동안은 새우를 더 늘리지 않는다.
-    private var isAwayDuringAwayTurn = false
+    /// 서기·움직이기 차례 중에 자리를 비운 시각 (무시하고 타이머는 계속). 이 동안은 새우를 더 늘리지 않는다.
+    /// 상한(Settings.awayGraceSeconds)보다 오래 비우면 진짜 자리 비움으로 넘긴다 (퇴근 등).
+    private var awayDuringAwayTurnSince: Date?
+    private var awayGrace: TimeInterval = 0
+    private var awayGraceTimer: Timer?
     private(set) var isAlerting = false
     /// 다음에 할(카운트다운 중이면 지금 하는) 루틴. 알림 중에는 이미 다음 루틴으로 넘어가 있다.
     private(set) var routine: Routine = .first
@@ -157,30 +160,72 @@ final class BreakScheduler {
     ///
     /// 단, 서기·움직이기 차례에는 자리를 뜨는 게 정상이므로 무시하고 타이머를 계속 돌린다.
     /// (그렇지 않으면 서 있는 동안 입력이 없어 자리 비움 → 돌아오는 순간 새우 없이 앉는 차례로 넘어가 버린다.)
+    /// 그래도 그 차례 길이의 2배(최소 10분)보다 오래 비우면 퇴근 등으로 보고 진짜 자리 비움으로 넘긴다.
     func setAway(_ away: Bool) {
-        if away, !isAway, !isUserPaused, activity != .sitting {
-            isAwayDuringAwayTurn = true
-            return
-        }
-        if !away, isAwayDuringAwayTurn {
-            isAwayDuringAwayTurn = false
-            return
-        }
-        guard away != isAway else { return }
-        isAway = away
-        if !away { routine = .first }
         if away {
-            stopAll()
-        } else if isUserPaused {
-            pausedRemaining = nil
-        } else {
-            restartCycle()
+            guard !isAway else { return }
+            if !isUserPaused, activity != .sitting {
+                startAwayGrace()
+                return
+            }
+            enterAway()
             return
         }
-        onChange()
+        if let since = awayDuringAwayTurnSince {
+            clearAwayDuringAwayTurn()
+            // 잠자기 중에는 상한 타이머가 돌지 못하므로, 돌아온 시점에 한 번 더 확인한다.
+            guard Date().timeIntervalSince(since) >= awayGrace else { return }
+            enterAway()
+        }
+        guard isAway else { return }
+        returnFromAway()
     }
 
     // MARK: - Private
+
+    /// 서기·움직이기 차례에 자리를 비웠다 → 바로 멈추지 않고 상한까지 기다린다.
+    private func startAwayGrace() {
+        guard awayDuringAwayTurnSince == nil else { return }
+        awayDuringAwayTurnSince = Date()
+        awayGrace = Settings.awayGraceSeconds(during: activity)
+        let timer = Timer(timeInterval: awayGrace, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleAwayGraceExpired() }
+        }
+        timer.tolerance = 10
+        RunLoop.main.add(timer, forMode: .common)
+        awayGraceTimer = timer
+    }
+
+    /// 서기·움직이기 차례의 자리 비움이 상한을 넘었다 → 진짜 자리 비움으로 넘긴다 (새우 정리, 타이머 정지).
+    private func handleAwayGraceExpired() {
+        guard awayDuringAwayTurnSince != nil else { return }
+        clearAwayDuringAwayTurn()
+        enterAway()
+    }
+
+    private func enterAway() {
+        isAway = true
+        stopAll()
+        onChange()
+    }
+
+    /// 자리에 다시 앉은 것으로 보고 첫 루틴부터 다시 센다.
+    private func returnFromAway() {
+        isAway = false
+        routine = .first
+        if isUserPaused {
+            pausedRemaining = nil
+            onChange()
+        } else {
+            restartCycle()
+        }
+    }
+
+    private func clearAwayDuringAwayTurn() {
+        awayDuringAwayTurnSince = nil
+        awayGraceTimer?.invalidate()
+        awayGraceTimer = nil
+    }
 
     /// 타이머 설정을 바꾼다. 이번 차례의 길이가 바뀌었을 때만 카운트다운을 새로 시작하고,
     /// 다음 차례에만 영향을 주는 변경(예: 앉아 있는 중에 서 있는 시간 변경)은 진행 중인 카운트다운을 유지한다.
@@ -239,7 +284,7 @@ final class BreakScheduler {
         let interval = TimeInterval(Settings.escalationSeconds)
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.isAwayDuringAwayTurn else { return } // 자리에 없을 땐 쌓지 않는다
+                guard let self, self.awayDuringAwayTurnSince == nil else { return } // 자리에 없을 땐 쌓지 않는다
                 self.onSpawn()
             }
         }

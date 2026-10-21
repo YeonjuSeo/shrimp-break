@@ -51,6 +51,13 @@ namespace ShrimpBreak
             }
         }
 
+        /// <summary>
+        /// 서기·움직이기 차례에는 자리 비움을 무시하지만, 이 시간보다 오래 비우면 진짜 자리 비움으로 본다.
+        /// 그 차례 길이의 2배, 최소 10분 (짧은 차례에서 잠깐 입력이 없었다고 새우 없이 넘어가지 않도록).
+        /// </summary>
+        public static TimeSpan AwayGrace(Routine routine)
+            => TimeSpan.FromMinutes(Math.Max(MinutesFor(routine) * 2, 10));
+
         public static void SetMinutes(Routine routine, int minutes)
         {
             switch (routine)
