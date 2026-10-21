@@ -15,7 +15,7 @@
     <ApplicationIcon>AppIcon.ico</ApplicationIcon>
     <PlatformTarget>AnyCPU</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
-    <Version>0.4.0</Version>
+    <Version>0.4.1</Version>
     <Product>ShrimpBreak</Product>
     <AssemblyTitle>새우 브레이크</AssemblyTitle>
     <Description>정해진 시간마다 새우가 튀어나와 자세를 바꾸라고 알려주는 앱</Description>
